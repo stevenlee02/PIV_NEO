@@ -38,7 +38,7 @@ export function ForceGraph({ nodes, links }, {
   const W = typeof linkStrokeWidth !== "function" ? null : d3.map(links, linkStrokeWidth);
   const L = typeof linkStroke !== "function" ? null : d3.map(links, linkStroke);
 
-  nodes = d3.map(nodes, (_, i) => ({id: N[i]}));
+  nodes = d3.map(nodes, (node, i) => ({ ...node, id: N[i] }));
   links = d3.map(links, (_, i) => ({source: LS[i], target: LT[i]}));
 
   if (G && nodeGroups === undefined) nodeGroups = d3.sort(G);

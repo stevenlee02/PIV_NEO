@@ -16,14 +16,42 @@
     #left {
       flex: 3;
       padding: 1rem;
-    }
+      }
     #right {
-      flex: 1;
+      flex: 2;                 /* 右侧更宽一点 */
+      min-width: 350px;
+      max-width: 500px;
       border-left: 2px solid #ccc;
       padding: 1rem;
       background: #fff;
-      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;           /* 占满右侧高度 */
     }
+
+    #details {
+      margin-bottom: 1rem;
+    }
+
+    /* 搜索框样式 */
+    #charSearch {
+      width: 100%;
+      padding: 0.4rem 0.6rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.95rem;
+      box-sizing: border-box;
+    }
+
+    /* 人物列表：可滚动，空间更大 */
+    #charList {
+      flex: 1;                 /* 占满剩余空间 */
+      max-height: none;
+      overflow-y: auto;
+      padding-left: 1.2rem;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
     #graph {
       width: 100%;
       height: 80vh;
@@ -58,7 +86,19 @@
   <div id="right">
     <h2>Character Details</h2>
     <div id="details">Click a node to see details</div>
+
+    <h2 style="margin-top: 1rem;">All Characters</h2>
+    <!-- 搜索框 -->
+    <input
+      id="charSearch"
+      type="text"
+      placeholder="Search character..."
+    />
+
+    <!-- 列表 -->
+    <ul id="charList"></ul>
   </div>
+
   <script type="module" src="./code.js?v=2"></script>
 </body>
 </html>

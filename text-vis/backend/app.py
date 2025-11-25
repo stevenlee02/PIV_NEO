@@ -5,6 +5,9 @@ import spacy
 import networkx as nx
 from collections import defaultdict
 from openai import OpenAI
+from dotenv import load_dotenv   # ⬅ 新增这一行
+
+load_dotenv()  # ⬅ 再新增这一行（一定要在 client = OpenAI(...) 之前）
 
 # ---------------- 初始化 ----------------
 app = FastAPI()
@@ -13,7 +16,12 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -188,11 +196,16 @@ Rules:
         for i in range(len(canon_list)):
             for j in range(i + 1, len(canon_list)):
                 a, b = canon_list[i], canon_list[j]
+                # 🔴 关键过滤：确保句子里真的出现了这两个 canonical 名字
+                #if a.lower() not in lower_sent or b.lower() not in lower_sent:
+                #    continue
                 if G.has_edge(a, b):
                     G[a][b]["weight"] += 1
                 else:
                     G.add_edge(a, b, weight=1)
-                # use sorted key so "A|B" and "B|A" map same
+                    key = "|".join(sorted([a, b]))
+
+                #use sorted key so "A|B" and "B|A" map same
                 key = "|".join(sorted([a, b]))
                 cooccurrence_texts[key].append(sent[:400])
 
