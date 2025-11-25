@@ -22,6 +22,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
+        "http://localhost:59799",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -304,24 +305,6 @@ Rules:
                 variant_to_canon[n_clean] = variant_to_canon[singular]
                 continue
 
-<<<<<<< HEAD
-        # 增加边并保存上下文句子
-        for i in range(len(canon_list)):
-            for j in range(i + 1, len(canon_list)):
-                a, b = canon_list[i], canon_list[j]
-                # 🔴 关键过滤：确保句子里真的出现了这两个 canonical 名字
-                #if a.lower() not in lower_sent or b.lower() not in lower_sent:
-                #    continue
-                if G.has_edge(a, b):
-                    G[a][b]["weight"] += 1
-                else:
-                    G.add_edge(a, b, weight=1)
-                    key = "|".join(sorted([a, b]))
-
-                #use sorted key so "A|B" and "B|A" map same
-                key = "|".join(sorted([a, b]))
-                cooccurrence_texts[key].append(sent[:400])
-=======
         # 如果名字已经在映射中就跳过
         if n_clean in variant_to_canon:
             continue
@@ -380,7 +363,6 @@ Rules:
                     if len(cooccurrence_texts[key]) < 5:  # 限制上下文条数 
                         ###这里是否需要区分长文本和短文本 对于短文本如果是过长的上下文 导致不同人物被聚合到一起
                         cooccurrence_texts[key].append(sent[:400])
->>>>>>> main
 
         nodes_to_keep = [n for n in G.nodes if G.nodes[n].get("count", 0) >= 5]
     

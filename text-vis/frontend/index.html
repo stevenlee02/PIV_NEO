@@ -13,10 +13,14 @@
       margin: 0;
       padding: 0;
     }
+
+    /* 左侧：关系图 */
     #left {
       flex: 3;
       padding: 1rem;
-      }
+    }
+
+    /* 右侧：详情 + 列表 */
     #right {
       flex: 2;                 /* 右侧更宽一点 */
       min-width: 350px;
@@ -42,9 +46,14 @@
       box-sizing: border-box;
     }
 
+    /* 搜索栏容器（搜索 + 排序） */
+    #search-bar {
+      margin-bottom: 0.5rem;
+    }
+
     /* 人物列表：可滚动，空间更大 */
     #charList {
-      flex: 1;                 /* 占满剩余空间 */
+      flex: 2;
       max-height: none;
       overflow-y: auto;
       padding-left: 1.2rem;
@@ -58,12 +67,14 @@
       border: 1px solid #ddd;
       background-color: #fff;
     }
+
     h2 {
       text-align: center;
     }
   </style>
 </head>
 <body>
+  <!-- 左侧：文件上传 + 网络图 -->
   <div id="left">
     <h2>Character Network</h2>
     <input type="file" id="fileInput" accept=".txt" />
@@ -80,22 +91,45 @@
       font-family: monospace;
       white-space: pre-wrap;">
     </div>
+
+    <!-- Reset View 按钮放在图上方 -->
+    <button id="resetViewBtn" style="
+      margin-bottom: 0.3rem;
+      padding: 0.4rem 0.8rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+    ">Reset View</button>
+
     <svg id="graph"></svg>
   </div>
 
+  <!-- 右侧：详情 + 时间线 + 列表 -->
   <div id="right">
     <h2>Character Details</h2>
     <div id="details">Click a node to see details</div>
 
-    <h2 style="margin-top: 1rem;">All Characters</h2>
-    <!-- 搜索框 -->
-    <input
-      id="charSearch"
-      type="text"
-      placeholder="Search character..."
-    />
+    <!-- ✅ 角色时间线 -->
+    <div id="timeline-panel">
+      <h3 style="text-align:center;">📈 Character Timeline</h3>
+      <svg id="timeline-svg" width="100%" height="150"></svg>
+    </div>
 
-    <!-- 列表 -->
+    <h2 style="margin-top: 1rem;">All Characters</h2>
+
+    <!-- 搜索 + 排序（已经没有 reset 按钮了） -->
+    <div id="search-bar">
+      <input
+        id="charSearch"
+        type="text"
+        placeholder="Search character..."
+      />
+      <select id="sortMode">
+        <option value="freq">Sort by frequency of occurrence</option>
+        <option value="name">Sort by surname initial</option>
+      </select>
+    </div>
+
+    <!-- 人物列表 -->
     <ul id="charList"></ul>
   </div>
 

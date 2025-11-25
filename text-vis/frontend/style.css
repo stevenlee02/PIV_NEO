@@ -5,3 +5,28 @@ svg { width: 100%; height: 100%; }
 .node { stroke: #fff; stroke-width: 1.5px; cursor: pointer; }
 .link { stroke-opacity: 0.6; }
 #info { margin-top: 10px; font-size: 0.9em; color: #333; }
+
+#timeline-panel {
+  margin-top: 0.5rem;
+  margin-bottom: 1rem;
+  border: 1px solid #ccc;
+  padding: 0.5rem;
+  background: #fafafa;
+}
+
+#search-bar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+#search-bar #charSearch {
+  flex: 1;
+}
+
+#sortMode,
+#resetViewBtn {
+  padding: 0.3rem 0.4rem;
+  font-size: 0.9rem;
+}

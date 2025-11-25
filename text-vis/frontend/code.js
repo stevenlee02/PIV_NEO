@@ -1,4 +1,60 @@
 import { ForceGraph } from "./forceGraph.js";
+import * as d3 from "https://cdn.skypack.dev/d3@7";
+
+
+// === 角色时间线：全局章节数据 ===
+let globalChapters = [];
+
+// 智能章节拆分：优先按 "Chapter 1 / CHAPTER I" 等拆；
+// 如果识别不到章节，就按段落均匀切成 ~50 段。
+function splitIntoChapters(text) {
+  if (!text) return [];
+
+  // 统一换行符
+  const normalized = text.replace(/\r\n/g, "\n");
+
+  // 几种常见章节格式的正则（前瞻，不丢掉章节标题）
+  const chapterPatterns = [
+    /(?=^Chapter\s+\d+)/gim,             // Chapter 1
+    /(?=^CHAPTER\s+\d+)/gm,              // CHAPTER 1
+    /(?=^CHAPTER\s+[IVXLCDM]+\.?)/gm,    // CHAPTER I, CHAPTER II ...
+  ];
+
+  for (const pattern of chapterPatterns) {
+    const parts = normalized.split(pattern)
+      .map(t => t.trim())
+      .filter(t => t.length > 0);
+
+    // 认为章节数至少得有 5 个才算真的章节结构
+    if (parts.length >= 5) {
+      console.log("Use chapter pattern split, chapters:", parts.length);
+      return parts;
+    }
+  }
+
+  // 如果上面的几种格式都没识别出来，就按“段落”切
+  let paragraphs = normalized
+    .split(/\n\s*\n+/)            // 空行分段
+    .map(t => t.trim())
+    .filter(t => t.length > 0);
+
+  // 段落数本来就不多（<= 50），那就直接当“章节”用
+  if (paragraphs.length <= 50) {
+    console.log("Use paragraphs as chapters:", paragraphs.length);
+    return paragraphs;
+  }
+
+  // 段落太多了：把它们均匀合并成 ~50 段
+  const targetParts = 50;
+  const size = Math.ceil(paragraphs.length / targetParts);
+  const merged = [];
+  for (let i = 0; i < paragraphs.length; i += size) {
+    merged.push(paragraphs.slice(i, i + size).join("\n\n"));
+  }
+  console.log("Use merged paragraphs as chapters:", merged.length);
+  return merged;
+}
+
 
 const uploadBtn = document.getElementById("uploadBtn");
 const fileInput = document.getElementById("fileInput");
@@ -6,6 +62,16 @@ const statusEl = document.getElementById("status");
 const infoEl = document.getElementById("info");
 const svg = document.getElementById("graph");
 const detailsEl = document.getElementById("details");
+const sortSelect = document.getElementById("sortMode");
+const resetViewBtn = document.getElementById("resetViewBtn");
+
+// ====== 图的全局引用：用于搜索时高亮 & 居中 ======
+let graphInnerSvg = null;         // ForceGraph 返回的那个 <svg>
+let graphNodes = [];              // 所有 <circle> 节点 DOM
+let nodeById = new Map();         // id -> circle
+let graphWidth = 0;
+let graphHeight = 0;
+
 
 function resizeSVG() {
   const width = window.innerWidth - 100;
@@ -21,6 +87,12 @@ uploadBtn.addEventListener("click", async () => {
   if (!file) return alert("Please select a file first.");
 
   statusEl.textContent = "Analyzing... (this may take a minute)";
+
+  // ✅ 在前端读取原始文本，拆成章节，给 timeline 用
+  const rawText = await file.text();
+  globalChapters = splitIntoChapters(rawText);
+  console.log("Chapters from file:", globalChapters.length);
+
   const formData = new FormData();
   formData.append("file", file);
 
@@ -39,6 +111,7 @@ uploadBtn.addEventListener("click", async () => {
   }
 });
 
+
 function drawGraph(data) {
   // 清空 SVG
   while (svg.firstChild) svg.removeChild(svg.firstChild);
@@ -46,10 +119,14 @@ function drawGraph(data) {
   const width = svg.clientWidth;
   const height = svg.clientHeight;
 
-  // 节点半径、力参数都做轻微调整，避免重叠太严重
+
+   // 节点半径、力参数都做轻微调整，避免重叠太严重
   const fg = ForceGraph(
     { 
-      nodes: data.nodes.map((d, i) => ({ ...d, id: d.id || `node-${i}`, value: d.value ?? 0,   // ⬅ 防止没 value 的时候出问题 
+      nodes: data.nodes.map((d, i) => ({ 
+        ...d, 
+        id: d.id || `node-${i}`, 
+        value: d.value ?? 0,   // ⬅ 防止没 value 的时候出问题 
       })), 
       links: data.links 
     },
@@ -65,17 +142,37 @@ function drawGraph(data) {
     }
   );
 
-  // 点击节点显示人物详情
-  const nodes = fg.querySelectorAll("circle");
-  nodes.forEach(n => {
+  // 保存图的全局引用，用于搜索高亮 & 视图定位
+  graphInnerSvg = fg;
+  graphWidth = width;
+  graphHeight = height;
+  graphNodes = Array.from(fg.querySelectorAll("circle"));
+  nodeById = new Map();
+  graphNodes.forEach((n) => {
+    const d = n.__data__;
+    if (d && d.id) {
+      nodeById.set(d.id, n);
+    }
+  });
+
+  // 点击节点显示人物详情 + 更新时间线
+  graphNodes.forEach(n => {
     n.addEventListener("click", () => {
       const d = n.__data__;
-      console.log("clicked node:", d);  // ⬅ 这里应该能看到 { id, value, ... }
+      console.log("clicked node:", d);
+
       detailsEl.innerHTML = `
         <h3>🧍 ${d.id}</h3>
         <p>Appears <b>${d.value}</b> times in text.</p>
         <p>Click a connection line to see shared scenes.</p>
       `;
+
+      // 计算并渲染该角色的时间线
+      const timelineData = buildCharacterTimeline(d.id, globalChapters);
+      renderCharacterTimeline(timelineData);
+
+      // 也顺便在图里高亮一下（点击节点时也居中）
+      focusCharacterOnGraph(d.id);
     });
   });
 
@@ -137,7 +234,6 @@ visibleLinks.forEach(line => {
   }
 });
 
-
   // 3. 让 hit 线跟着原线移动
   const observer = new MutationObserver(() => {
     hit.setAttribute("x1", line.getAttribute("x1"));
@@ -148,10 +244,9 @@ visibleLinks.forEach(line => {
   observer.observe(line, { attributes: true });
 });
 
-
   svg.appendChild(fg);
 
-  // ===== 人物列表 + 搜索 =====
+    // ===== 人物列表 + 搜索 + 排序 =====
   const listEl = document.getElementById("charList");
   const searchInput = document.getElementById("charSearch");
 
@@ -163,31 +258,300 @@ visibleLinks.forEach(line => {
       value: d.value ?? 0,
     }));
 
-    // 按出现次数从大到小排序
-    const sorted = nodesWithValue.sort((a, b) => b.value - a.value);
+    // 当前排序方式：freq / name
+    let currentSortMode = (sortSelect && sortSelect.value) || "freq";
 
-    // 把完整列表挂到全局，方便调试/复用（可选）
-    window.allCharacters = sorted;
+    // 按当前排序方式对列表排序
+    function sortCharacters(list) {
+      const arr = [...list]; // 拷贝一份，不改原数组
+      if (currentSortMode === "name") {
+        // 按姓名首字母
+        arr.sort((a, b) => a.id.localeCompare(b.id));
+      } else {
+        // 按出现次数
+        arr.sort((a, b) => b.value - a.value);
+      }
+      return arr;
+    }
 
-    // 渲染列表的函数
+    // 渲染列表（带 data-id，方便点击高亮）
     function renderCharList(list) {
-      listEl.innerHTML = list
-        .map(d => `<li>${d.id} (${d.value})</li>`)
+      const sortedList = sortCharacters(list);
+      listEl.innerHTML = sortedList
+        .map(d => `<li data-id="${d.id}">${d.id} (${d.value})</li>`)
         .join("");
     }
 
-    // 先渲染完整列表
-    renderCharList(sorted);
+    // 初始渲染全部人物
+    renderCharList(nodesWithValue);
 
-    // 搜索功能：输入时按名字过滤
+    // 点击列表中的人物，在图中高亮并居中
+    listEl.onclick = (e) => {
+    const li = e.target.closest("li");
+    if (!li) return;
+
+    const name = li.getAttribute("data-id");
+    if (!name) return;
+
+    // 找到图中对应节点
+    const node = nodeById.get(name);
+    if (!node) return;
+
+    const d = node.__data__;
+
+    //
+    // 1️⃣ 更新 Character Details
+    //
+    detailsEl.innerHTML = `
+      <h3>🧍 ${d.id}</h3>
+      <p>Appears <b>${d.value}</b> times in text.</p>
+      <p>Click a connection line to see shared scenes.</p>
+    `;
+
+    //
+    // 2️⃣ 更新时间线
+    //
+    const timelineData = buildCharacterTimeline(d.id, globalChapters);
+    renderCharacterTimeline(timelineData);
+
+    //
+    // 3️⃣ 在图中高亮并居中
+    //
+    focusCharacterOnGraph(name);
+  };
+
+
+        // 搜索：过滤 + 自动高亮第一个匹配
     if (searchInput) {
       searchInput.oninput = () => {
         const q = searchInput.value.trim().toLowerCase();
         const filtered = q
-          ? sorted.filter(d => d.id.toLowerCase().includes(q))
-          : sorted;
+          ? nodesWithValue.filter(d => d.id.toLowerCase().includes(q))
+          : nodesWithValue;
+        renderCharList(filtered);
+
+        // 清空搜索时恢复视图
+        if (!q) {
+          resetGraphView();
+          return;
+        }
+
+        // 有搜索词且有匹配时，高亮第一个匹配的角色
+        if (filtered.length > 0) {
+          focusCharacterOnGraph(filtered[0].id);
+        }
+      };
+    }
+
+
+    // 排序方式切换
+    if (sortSelect) {
+      sortSelect.onchange = () => {
+        currentSortMode = sortSelect.value;
+
+        const q = searchInput ? searchInput.value.trim().toLowerCase() : "";
+        const filtered = q
+          ? nodesWithValue.filter(d => {
+            const name = d.id.toLowerCase();
+            const parts = name.split(/\s+/);      // 拆成 ["charlotte", "lucas"]
+            return name.includes(q)               // 全名包含
+              || parts.some(p => p.includes(q)); // 任意单词包含
+          })
+  : nodesWithValue;
+
+
         renderCharList(filtered);
       };
     }
   }
+}
+
+// === 构建某个角色在各章节的出现次数 ===
+function buildCharacterTimeline(characterName, chapters) {
+  if (!characterName || !chapters || chapters.length === 0) return [];
+
+  // 转义正则特殊字符
+  const escaped = characterName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(escaped, "gi");
+
+  return chapters.map((chapterText, i) => {
+    const matches = chapterText.match(pattern);
+    return {
+      chapter: i + 1,
+      count: matches ? matches.length : 0,
+    };
+  });
+}
+
+// === 用 d3 把 timelineData 画成折线图 ===
+// timelineData: [{ chapter: 1, count: 3 }, ...]
+function renderCharacterTimeline(timelineData) {
+  const svgEl = document.getElementById("timeline-svg");
+  if (!svgEl) return;
+
+  const svg = d3.select(svgEl);
+
+  // 清空旧图
+  svg.selectAll("*").remove();
+
+  const width = svgEl.clientWidth || 400;
+  const height = svgEl.clientHeight || 180;
+
+  // 设置 viewBox，自适应
+  svg.attr("viewBox", `0 0 ${width} ${height}`);
+
+  // 没数据 或 所有章节出现次数都为 0
+  if (!timelineData || timelineData.length === 0 ||
+      d3.max(timelineData, d => d.count) === 0) {
+    svg.append("text")
+      .attr("x", 10)
+      .attr("y", 20)
+      .attr("font-size", 12)
+      .text("No timeline data.");
+    return;
+  }
+
+  const margin = { top: 20, right: 20, bottom: 30, left: 45 };
+  const innerWidth = width - margin.left - margin.right;
+  const innerHeight = height - margin.top - margin.bottom;
+
+  const maxChapter = d3.max(timelineData, d => d.chapter);
+  const maxCount = d3.max(timelineData, d => d.count);
+
+  // X 轴：章节
+  const x = d3.scaleLinear()
+    .domain([1, maxChapter])
+    .range([0, innerWidth]);
+
+  // Y 轴：出现次数
+  const y = d3.scaleLinear()
+    .domain([0, maxCount])
+    .nice()
+    .range([innerHeight, 0]);
+
+  const g = svg.append("g")
+    .attr("transform", `translate(${margin.left},${margin.top})`);
+
+  // X 轴（最多 20 个刻度，避免全挤在一起）
+  const tickCount = Math.min(20, maxChapter);
+  g.append("g")
+    .attr("transform", `translate(0,${innerHeight})`)
+    .call(
+      d3.axisBottom(x)
+        .ticks(tickCount)
+        .tickFormat(d3.format("d"))
+    );
+
+  // Y 轴
+  g.append("g")
+    .call(d3.axisLeft(y).ticks(4));
+
+  // Y 轴标签
+  g.append("text")
+    .attr("x", 0)
+    .attr("y", -8)
+    .attr("font-size", 11)
+    .text("Occurrences per chapter");
+
+  // X 轴标签
+  g.append("text")
+    .attr("x", innerWidth / 2)
+    .attr("y", innerHeight + 25)
+    .attr("font-size", 11)
+    .attr("text-anchor", "middle")
+    .text("Chapters");
+
+  // 折线生成器
+  const line = d3.line()
+    .x(d => x(d.chapter))
+    .y(d => y(d.count));
+
+  // 画折线
+  g.append("path")
+    .datum(timelineData)
+    .attr("fill", "none")
+    .attr("stroke", "steelblue")
+    .attr("stroke-width", 2)
+    .attr("d", line);
+
+  // 圆点 + 原生 tooltip
+  const dots = g.selectAll("circle")
+    .data(timelineData)
+    .enter()
+    .append("circle")
+    .attr("cx", d => x(d.chapter))
+    .attr("cy", d => y(d.count))
+    .attr("r", 3)
+    .attr("fill", "steelblue");
+
+  // 浏览器自带 tooltip：悬停显示“第 N 章：出现 X 次”
+  dots.append("title")
+    .text(d => `Chapter ${d.chapter}: ${d.count} time(s)`);
+}
+
+
+
+// ===== 搜索人物时：高亮图中节点并放大居中 =====
+function focusCharacterOnGraph(name) {
+  if (!name || !graphInnerSvg || !graphNodes.length) return;
+
+  const targetNode = nodeById.get(name);
+  if (!targetNode) {
+    console.warn("No node found for name:", name);
+    return;
+  }
+
+  // 1. 先恢复所有节点为默认样式
+  graphNodes.forEach((n) => {
+    const d = n.__data__;
+    const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
+    n.setAttribute("r", baseR);
+    n.setAttribute("stroke", "#fff");
+    n.setAttribute("stroke-width", "1.5");
+    n.setAttribute("fill", "black");
+  });
+
+  // 2. 高亮目标节点：放大 + 改颜色
+  const d = targetNode.__data__;
+  const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
+  targetNode.setAttribute("r", baseR * 2.0);          // 放大一倍
+  targetNode.setAttribute("stroke", "#ff5733");
+  targetNode.setAttribute("stroke-width", "3");
+  targetNode.setAttribute("fill", "#ffcc00");
+
+  // 3. 通过修改 viewBox 来实现“放大居中”
+  // ForceGraph 的初始 viewBox 是 [-width/2, -height/2, width, height]
+  const zoom = 2.0; // 越大越“放大”
+  const vbWidth = graphWidth / zoom;
+  const vbHeight = graphHeight / zoom;
+
+  const centerX = d.x - vbWidth / 2;
+  const centerY = d.y - vbHeight / 2;
+
+  graphInnerSvg.setAttribute("viewBox", `${centerX} ${centerY} ${vbWidth} ${vbHeight}`);
+}
+
+// ===== 重置整张图的视图和节点样式 =====
+function resetGraphView() {
+  if (!graphInnerSvg) return;
+
+  // 视图恢复：完整 viewBox
+  graphInnerSvg.setAttribute(
+    "viewBox",
+    `${-graphWidth / 2} ${-graphHeight / 2} ${graphWidth} ${graphHeight}`
+  );
+
+  // 节点样式恢复默认
+  graphNodes.forEach((n) => {
+    const d = n.__data__;
+    const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
+    n.setAttribute("r", baseR);
+    n.setAttribute("stroke", "#fff");
+    n.setAttribute("stroke-width", "1.5");
+    n.setAttribute("fill", "black");
+  });
+}
+
+if (resetViewBtn) {
+  resetViewBtn.addEventListener("click", resetGraphView);
 }
