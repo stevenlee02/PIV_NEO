@@ -135,7 +135,7 @@ function drawGraph(data) {
       nodeId: d => d.id,
       nodeTitle: d => `${d.id}\nCount: ${d.value}`,
       nodeRadius: d => 3 + Math.log2((d.value ?? 0) + 1), // 🔹 节点更小
-      linkStrokeWidth: d => 0.6 + Math.sqrt(d.value) * 0.5, // 🔹 线更细
+      linkStrokeWidth: d => 0.6 + Math.sqrt(d.value) * 0.6, // 🔹 线更细
       nodeStrength: -300,   // 🔹 增加斥力
       linkStrength: 0.05,   // 🔹 减弱连线拉力
       width,
@@ -156,6 +156,55 @@ function drawGraph(data) {
     }
   });
 
+  //悬停在节点时高亮这个点以及这个点相连的所有线
+  graphNodes.forEach(n => {
+    n.addEventListener("mouseover", () => {
+      //高亮节点样式
+      const d = n.__data__;
+      const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
+      n.setAttribute("r", baseR * 1.25);
+      n.setAttribute("stroke", "#fa0");
+      n.setAttribute("stroke-width", "2.5");
+      //高亮连线样式
+      const connectedLinks = fg.querySelectorAll("line").forEach(line => {
+        const linkData = line.__data__;
+        if (linkData.source.id === d.id || linkData.target.id === d.id) {
+          line.setAttribute("stroke", "#fa0");
+          line.setAttribute("stroke-opacity", "0.999");
+          line.setAttribute("stroke-width", "2.5");
+        }
+      });
+    });
+    n.addEventListener("mouseout", () => {
+      //恢复节点样式
+      const d = n.__data__;
+      const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
+      n.setAttribute("r", baseR);
+      n.setAttribute("stroke", "#fff");
+      n.setAttribute("stroke-width", "1.5");
+      //恢复连线样式
+      const connectedLinks = fg.querySelectorAll("line").forEach(line => {
+        const linkData = line.__data__;
+        if (linkData.source.id === d.id || linkData.target.id === d.id) {
+          line.setAttribute("stroke", "#999");
+          line.setAttribute("stroke-opacity", "0.4");
+          line.setAttribute("stroke-width", "1.5");
+        }
+      });
+    });
+  });
+    /*graphNodes.forEach(n => {
+    n.addEventListener("mouseover", () => {
+      n.setAttribute("stroke", "#fa0");
+      n.setAttribute("stroke-width", "2.5");
+    });
+    n.addEventListener("mouseout", () => {
+      const d = n.__data__;
+      n.setAttribute("stroke", "#fff");
+      n.setAttribute("stroke-width", "1.5");
+    });
+  });*/
+
   // 点击节点显示人物详情 + 更新时间线
   graphNodes.forEach(n => {
     n.addEventListener("click", () => {
@@ -172,15 +221,46 @@ function drawGraph(data) {
       const timelineData = buildCharacterTimeline(d.id, globalChapters);
       renderCharacterTimeline(timelineData);
 
+      // 高亮这个点以及所有与它相连的线
+      graphNodes.forEach((node) => {
+        const nodeData = node.__data__;
+        if (nodeData.id === d.id) {
+          const baseR = 3 + Math.log2(((nodeData?.value) ?? 0) + 1);
+          node.setAttribute("r", baseR * 1.25);
+          node.setAttribute("stroke", "#f00");
+          node.setAttribute("stroke-width", "3");
+          node.setAttribute("fill", "#f00");
+        } else {
+          const baseR = 3 + Math.log2(((nodeData?.value) ?? 0) + 1);
+          node.setAttribute("r", baseR);
+          node.setAttribute("stroke", "#fff");
+          node.setAttribute("stroke-width", "1.5");
+          node.setAttribute("fill", "black");
+        }
+      });
+      const visibleLinks = fg.querySelectorAll("line");
+      visibleLinks.forEach(line => {
+        const linkData = line.__data__;
+        if (linkData.source.id === d.id || linkData.target.id === d.id) {
+          line.setAttribute("stroke", "#f00");
+          line.setAttribute("stroke-opacity", "0.95");
+          line.setAttribute("stroke-width", "3");
+        } else {
+          line.setAttribute("stroke", "#999");
+          line.setAttribute("stroke-opacity", "0.4");
+          line.setAttribute("stroke-width", "1.5");
+        }
+      });
+
       // 也顺便在图里高亮一下（点击节点时也居中）
       focusCharacterOnGraph(d.id);
     });
   });
 
  // 点击连线显示上下文片段（与后端 sorted key 对齐）
-const visibleLinks = fg.querySelectorAll("line");
+  const visibleLinks = fg.querySelectorAll("line");
 
-visibleLinks.forEach(line => {
+  visibleLinks.forEach(line => {
   const d = line.__data__;
 
   // 1. 为每条线创建一个“透明粗线”作为点击区域（hitbox）
@@ -192,30 +272,48 @@ visibleLinks.forEach(line => {
   hit.setAttribute("x2", line.getAttribute("x2"));
   hit.setAttribute("y2", line.getAttribute("y2"));
 
+  //悬停在线上时，此线段高亮
+  hit.addEventListener("mouseover", () => {
+    line.setAttribute("stroke", "#fa0");
+    line.setAttribute("stroke-opacity", "0.999");
+    line.setAttribute("stroke-width", "2.5");
+  });
+
+  //鼠标移出时，恢复线段样式
+  hit.addEventListener("mouseout", () => {
+    line.setAttribute("stroke", "#999");
+    line.setAttribute("stroke-opacity", "0.4");
+    line.setAttribute("stroke-width", "1.5");
+  });
+
+
   // 粗线 + 透明 + 鼠标样式
   hit.setAttribute("stroke", "transparent");
-  hit.setAttribute("stroke-width", 15);     // 点击区域宽 15 像素
+  hit.setAttribute("stroke-width", 5);     // 点击区域宽5像素，加粗了我认为暂不需要
   hit.style.cursor = "pointer";
 
-  // 把 hit 线插到原线的后面（同一个 <g> 里）
+  //把 hit 线插到原线的后面（同一个 <g> 里）
   line.parentNode.insertBefore(hit, line.nextSibling);
 
   // 2. 点击 hit 线时，展示上下文
- hit.addEventListener("click", () => {
+  hit.addEventListener("click", () => {
   const key = [d.source.id, d.target.id].sort().join("|");
   const ctx = data.contexts[key];
-
-  // ① 先把所有可见线复原成“默认样式”
-  visibleLinks.forEach(l => {
-    l.setAttribute("stroke", "#999");          // 默认灰
-    l.setAttribute("stroke-opacity", "0.4");
-    l.setAttribute("stroke-width", "1.5");     // 和 ForceGraph 里差不多
+  
+  //高亮当前这条线,淡化其他线条，直到下一次点击
+  const allLinks = fg.querySelectorAll("line");
+  allLinks.forEach(l => {
+    if (l === line) {
+      l.setAttribute("stroke", "#f00");
+      l.setAttribute("stroke-opacity", "0.95");
+      l.setAttribute("stroke-width", "3");
+    } else {
+      l.setAttribute("stroke", "#999");
+      l.setAttribute("stroke-opacity", "0.2");
+      l.setAttribute("stroke-width", "1.5");
+    }
   });
 
-  // ② 再把当前这条线高亮
-  line.setAttribute("stroke", "#f00");      // 高亮红
-  line.setAttribute("stroke-opacity", "0.95");
-  line.setAttribute("stroke-width", "3");      // 比其它线粗一点
 
   // ③ Console 打印，方便调试
   console.log("clicked link:", key, "contexts:", ctx ? ctx.length : 0);
@@ -250,7 +348,6 @@ visibleLinks.forEach(line => {
     // ===== 人物列表 + 搜索 + 排序 =====
   const listEl = document.getElementById("charList");
   const searchInput = document.getElementById("charSearch");
-
   if (listEl) {
     // 统一整理数据
     const nodesWithValue = data.nodes.map((d, i) => ({
@@ -365,6 +462,7 @@ visibleLinks.forEach(line => {
       };
     }
   }
+
 }
 
 // === 构建某个角色在各章节的出现次数 ===
@@ -518,7 +616,16 @@ function focusCharacterOnGraph(name) {
   targetNode.setAttribute("r", baseR * 1.25);          // 放大一倍
   targetNode.setAttribute("stroke", "#f00");
   targetNode.setAttribute("stroke-width", "3");
-  targetNode.setAttribute("fill", "#ffcc00");
+  targetNode.setAttribute("fill", "#f00");
+  // 同时高亮与它相连的线
+  const connectedLinks = graphInnerSvg.querySelectorAll("line").forEach(line => {
+    const linkData = line.__data__;
+    if (linkData.source.id === d.id || linkData.target.id === d.id) {
+      line.setAttribute("stroke", "#f00");
+      line.setAttribute("stroke-opacity", "0.95");
+      line.setAttribute("stroke-width", "3");
+    }
+  });
 
   // 3. 通过修改 viewBox 来实现“放大居中”
   // ForceGraph 的初始 viewBox 是 [-width/2, -height/2, width, height]
@@ -535,7 +642,6 @@ function focusCharacterOnGraph(name) {
 // ===== 重置整张图的视图和节点样式 =====
 function resetGraphView() {
   if (!graphInnerSvg) return;
-
   // 视图恢复：完整 viewBox
   graphInnerSvg.setAttribute(
     "viewBox",
