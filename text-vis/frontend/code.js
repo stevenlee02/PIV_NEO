@@ -208,7 +208,7 @@ visibleLinks.forEach(line => {
   // ① 先把所有可见线复原成“默认样式”
   visibleLinks.forEach(l => {
     l.setAttribute("stroke", "#999");          // 默认灰
-    l.setAttribute("stroke-opacity", "0.6");
+    l.setAttribute("stroke-opacity", "0.4");
     l.setAttribute("stroke-width", "1.5");     // 和 ForceGraph 里差不多
   });
 
@@ -516,7 +516,7 @@ function focusCharacterOnGraph(name) {
   const d = targetNode.__data__;
   const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
   targetNode.setAttribute("r", baseR * 1.25);          // 放大一倍
-  targetNode.setAttribute("stroke", "#ff5733");
+  targetNode.setAttribute("stroke", "#f00");
   targetNode.setAttribute("stroke-width", "3");
   targetNode.setAttribute("fill", "#ffcc00");
 
@@ -551,6 +551,15 @@ function resetGraphView() {
     n.setAttribute("stroke-width", "1.5");
     n.setAttribute("fill", "black");
   });
+  // 线条样式恢复默认
+  if (graphInnerSvg) {
+    const visibleLinks = graphInnerSvg.querySelectorAll("line");  
+    visibleLinks.forEach(l => {
+      l.setAttribute("stroke", "#999");
+      l.setAttribute("stroke-opacity", "0.4");
+      l.setAttribute("stroke-width", "1.5");
+    });
+  }
 }
 
 if (resetViewBtn) {
