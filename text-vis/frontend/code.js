@@ -96,8 +96,9 @@ uploadBtn.addEventListener("click", async () => {
   const formData = new FormData();
   formData.append("file", file);
 
+  //csy此处为8000，lzc改为8001才能运行
   try {
-    const res = await fetch("http://127.0.0.1:8000/analyze", {
+    const res = await fetch("http://127.0.0.1:8001/analyze", {
       method: "POST",
       body: formData
     });
@@ -134,7 +135,7 @@ function drawGraph(data) {
       nodeId: d => d.id,
       nodeTitle: d => `${d.id}\nCount: ${d.value}`,
       nodeRadius: d => 3 + Math.log2((d.value ?? 0) + 1), // 🔹 节点更小
-      linkStrokeWidth: d => 0.3 + Math.sqrt(d.value) * 0.3, // 🔹 线更细
+      linkStrokeWidth: d => 0.6 + Math.sqrt(d.value) * 0.5, // 🔹 线更细
       nodeStrength: -300,   // 🔹 增加斥力
       linkStrength: 0.05,   // 🔹 减弱连线拉力
       width,
@@ -212,7 +213,7 @@ visibleLinks.forEach(line => {
   });
 
   // ② 再把当前这条线高亮
-  line.setAttribute("stroke", "#ff5733");      // 高亮橙红
+  line.setAttribute("stroke", "#f00");      // 高亮红
   line.setAttribute("stroke-opacity", "0.95");
   line.setAttribute("stroke-width", "3");      // 比其它线粗一点
 
@@ -514,14 +515,14 @@ function focusCharacterOnGraph(name) {
   // 2. 高亮目标节点：放大 + 改颜色
   const d = targetNode.__data__;
   const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
-  targetNode.setAttribute("r", baseR * 2.0);          // 放大一倍
+  targetNode.setAttribute("r", baseR * 1.25);          // 放大一倍
   targetNode.setAttribute("stroke", "#ff5733");
   targetNode.setAttribute("stroke-width", "3");
   targetNode.setAttribute("fill", "#ffcc00");
 
   // 3. 通过修改 viewBox 来实现“放大居中”
   // ForceGraph 的初始 viewBox 是 [-width/2, -height/2, width, height]
-  const zoom = 2.0; // 越大越“放大”
+  const zoom = 1.25; // 越大越“放大”
   const vbWidth = graphWidth / zoom;
   const vbHeight = graphHeight / zoom;
 
