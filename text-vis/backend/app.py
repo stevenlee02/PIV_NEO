@@ -6,6 +6,7 @@ import spacy
 import networkx as nx
 from collections import defaultdict
 from openai import OpenAI
+from pydantic import BaseModel
 
 # ---------------- 初始化 ----------------
 app = FastAPI()
@@ -19,6 +20,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class TextData(BaseModel):
+    text: str
 
 # 泛化黑名单 用于clean_name
 BLACKLIST = {
@@ -120,17 +124,10 @@ def clean_illustrations(text: str) -> str:
     return text
 
 
-# ---------------- 主分析接口 ----------------
-@app.post("/analyze")
-async def analyze(file: UploadFile):
-    text = (await file.read()).decode("utf-8", errors="ignore")
-    # 删掉Gutenberg illustration
+# ---------------- 共用文本分析函数 ----------------
+def process_text(text: str):
     text = clean_illustrations(text)
-
-    skip_words = [
-        "copyright", "edition", "chapter", "preface",
-        "project", "release", "translator", "gutenberg"
-    ]
+    skip_words = SKIP_WORDS
     
     print("🔹 Splitting sentences and extracting names...")
     sentences = split_text_by_sentence(text)
@@ -153,8 +150,45 @@ async def analyze(file: UploadFile):
 
     unique_names = sorted(set(all_names))[:200]
     print(f"Extracted {len(unique_names)} candidate names.")
+    # 检测是否为短文本
+    is_short_text = len(text) < 20000  # 小于2万字符算短文本
+    
+    # 修改prompt，对短文本添加更严格的要求
+    if is_short_text:
+        prompt = f"""
+You are an expert in literary text analysis.
 
-    prompt = f"""
+You are given a list of PERSON entities automatically extracted from a SHORT STORY.
+They may include:
+- Character names (like "James Dillingham Young", "Della")
+- Nicknames (like "Jim", "Dell")
+
+Here is the extracted list (max 200 entries):
+{json.dumps(unique_names, ensure_ascii=False)}
+
+CRITICAL FOR SHORT STORIES: 
+- Be VERY CONSERVATIVE when merging names. 
+- Only merge names if you are ABSOLUTELY certain they refer to the same character.
+- In short stories, different characters often have distinct names without many variants.
+- DO NOT merge names like "Della" and "James" - they are clearly different characters.
+- When in doubt, keep names separate rather than risk incorrect merging.
+
+Your job:
+1. Identify which names correspond to fictional characters from the story.
+2. Merge name variants ONLY when you are certain they refer to the same character.
+3. Exclude any non-character entities.
+4. Output only valid JSON in this exact structure:
+
+{{ "Canonical Character Name": ["variant1", "variant2", "variant3"] }}
+
+Rules:
+- Output must be a single valid JSON object.
+- No markdown, no explanations, no comments, no backticks.
+- Be conservative - better to have separate entries than incorrect merges.
+"""
+
+    else: 
+        prompt = f"""
 You are an expert in literary text analysis.
 
 You are given a list of PERSON entities automatically extracted from a novel.
@@ -320,7 +354,27 @@ Rules:
         G = nx.Graph()
         cooccurrence_texts = defaultdict(list)
 
+        # 根据句子数量动态调整阈值
+        total_sentences = len(sentences)
+        if total_sentences < 100:  # 短文本
+            min_count_threshold = 1  # 出现1次就保留
+        elif total_sentences < 500:  # 中等长度
+            min_count_threshold = 2  # 出现2次就保留
+        else:  # 长文本
+            min_count_threshold = 5  # 原始阈值
+
         for sent, persons in zip(sentences, sent_persons):
+            # 计算文本长度，动态调整上下文大小
+            text_length = len(' '.join(sentences))
+            is_long_text = text_length > 50000  # 50K字符以上算长文本
+            # 动态设置上下文长度
+            if is_long_text:
+            # 长文本：可以保留较长上下文（400字符）
+                context_length = 400
+            else:
+            # 短文本：使用较短上下文，避免场景混合
+                context_length = 200
+
             # 将句子中提取的每个名字替换成canonical 若没有canonical则跳过
             canon_list = []
             for p in persons:
@@ -352,12 +406,12 @@ Rules:
                     # use sorted key so "A|B" and "B|A" map same
                     key = "|".join(sorted([a, b]))
                     if len(cooccurrence_texts[key]) < 5:  # 限制上下文条数 
-                        ###这里是否需要区分长文本和短文本 对于短文本如果是过长的上下文 导致不同人物被聚合到一起
-                        cooccurrence_texts[key].append(sent[:400])
-
-        nodes_to_keep = [n for n in G.nodes if G.nodes[n].get("count", 0) >= 5]
+                        cooccurrence_texts[key].append(sent[:200])
+        # 使用动态阈值过滤节点
+        nodes_to_keep = [n for n in G.nodes if G.nodes[n].get("count", 0) >= min_count_threshold]
+        print(f"Filter threshold: {min_count_threshold}, Nodes before filtering: {len(G.nodes)}, after: {len(nodes_to_keep)}")
     
-        # 创建子图 只保留出现次数>=5的节点
+        # 创建子图
         G_filtered = G.subgraph(nodes_to_keep).copy()
     
         all_nodes = list(G_filtered.nodes)
@@ -385,6 +439,19 @@ Rules:
         return {"nodes": nodes, "links": links, "contexts": dict(cooccurrence_texts)}
     
     result = build_cooccurrence_network(sentences, sent_persons, variant_to_canon)
+    return result
+
+# ---------------- 主分析接口 ----------------
+@app.post("/analyze")
+async def analyze(file: UploadFile):
+    text = (await file.read()).decode("utf-8", errors="ignore")
+    result = process_text(text)
+    return result
+
+@app.post("/analyze-text")
+async def analyze_text(data: TextData):
+    text = data.text
+    result = process_text(text)
     return result
 
 @app.get("/ping")
