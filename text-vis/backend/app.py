@@ -6,7 +6,8 @@ import spacy
 import networkx as nx
 from collections import defaultdict
 from openai import OpenAI
-
+from dotenv import load_dotenv   # ⬅ 新增这一行
+load_dotenv()  # ⬅ 再新增这一行（一定要在 client = OpenAI(...) 之前）
 from pydantic import BaseModel
 
 # ---------------- 初始化 ----------------
@@ -128,6 +129,94 @@ def clean_illustrations(text: str) -> str:
     """
 
     return text
+
+
+# ---------------- 章节拆分函数 ----------------
+def split_into_chapters(text: str):
+    if not text:
+        return []
+
+    # 标准化换行
+    normalized = re.sub(r'\r\n', '\n', text)
+
+    # 带捕获组的章节模式（这样 re.split 会保留章节标题）
+    chapter_patterns = [
+        r"(Chapter\s+\d+)",           # Chapter 1
+        r"(CHAPTER\s+\d+)",           # CHAPTER 1
+        r"(CHAPTER\s+[IVXLCDM]+\.?)", # CHAPTER I, CHAPTER II ...
+    ]
+
+    for pat in chapter_patterns:
+        # 使用捕获组保留章节标题
+        raw = re.split(pat, normalized, flags=re.MULTILINE | re.IGNORECASE)
+        # raw 结构:
+        # ["前言内容", "CHAPTER 1", "正文1", "CHAPTER 2", "正文2", ...]
+        if len(raw) > 1:
+            parts = []
+            for i in range(1, len(raw), 2):
+                title = raw[i].strip()                       # 标题
+                body = raw[i + 1].strip() if i + 1 < len(raw) else ""  # 正文
+                parts.append(title + "\n" + body)
+
+            # 至少 5 章才算真正的章节结构
+            if len(parts) >= 5:
+                return parts
+
+    # ---- 无明显章节标题时，按段落拆分 ----
+    paragraphs = re.split(r"\n\s*\n+", normalized)
+    paragraphs = [p.strip() for p in paragraphs if p.strip()]
+
+    if len(paragraphs) <= 50:
+        return paragraphs
+
+    # 段落太多 → 合并成 ~50 段
+    target = 50
+    size = (len(paragraphs) + target - 1) // target
+    merged = ["\n\n".join(paragraphs[i:i + size]) for i in range(0, len(paragraphs), size)]
+    return merged
+
+
+# ---------------- timeline函数 ----------------
+def compute_timeline(chapters, variant_to_canon):
+    """
+    返回: { 'Mr Darcy': [count_ch1, count_ch2, ...], ... }
+    这里按“canonical + 所有变体”的联合正则来统计每章出现次数。
+    """
+
+    # 先把 variant_to_canon 反转：canonical -> {variants...}
+    from collections import defaultdict
+
+    canon_to_variants = defaultdict(set)
+    for variant, canon in variant_to_canon.items():
+        canon_to_variants[canon].add(canon)    # canonical 自己也算一种写法
+        canon_to_variants[canon].add(variant)  # 以及所有变体
+
+    timeline = defaultdict(lambda: [0] * len(chapters))
+
+    for idx, chapter_text in enumerate(chapters):
+        # 将章节文本归一化（仿 clean_name）
+        norm_text = re.sub(r"[^A-Za-z\s']", " ", chapter_text)
+        norm_text = re.sub(r"\s+", " ", norm_text)
+
+        # 对每个 canonical 统计：它的所有变体在本章中出现的总次数
+        for canon, variants in canon_to_variants.items():
+            # 为这个 canonical 构造一个联合正则：(Var1|Var2|...)
+            pattern_parts = []
+            for v in variants:
+                # 把名字里的空格变成 \s+，允许多个空白（Mr Darcy / Mr   Darcy）
+                v_regex = re.escape(v).replace(r"\ ", r"\s+")
+                pattern_parts.append(v_regex)
+
+            if not pattern_parts:
+                continue
+
+            pattern = re.compile(r"\b(?:%s)\b" % "|".join(pattern_parts),
+                                 re.IGNORECASE)
+
+            matches = pattern.findall(norm_text)
+            timeline[canon][idx] = len(matches)
+    print("Elizabeth timeline:", timeline.get("Elizabeth Bennet"))#console打印check
+    return timeline
 
 
 # ---------------- 共用文本分析函数 ----------------
@@ -445,6 +534,16 @@ Rules:
         return {"nodes": nodes, "links": links, "contexts": dict(cooccurrence_texts)}
     
     result = build_cooccurrence_network(sentences, sent_persons, variant_to_canon)
+    # 在这里调用章节拆分函数
+    chapters = split_into_chapters(text)
+
+    # 计算 timeline
+    timeline = compute_timeline(chapters, variant_to_canon)
+
+    # 把 timeline 信息加入结果返回
+    result["timeline"] = timeline
+    result["chapter_count"] = len(chapters)
+
     return result
 
 # ---------------- 主分析接口 ----------------

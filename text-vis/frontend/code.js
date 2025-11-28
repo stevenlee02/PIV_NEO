@@ -1,61 +1,6 @@
 import { ForceGraph } from "./forceGraph.js";
 import * as d3 from "https://cdn.skypack.dev/d3@7";
 
-
-// === 角色时间线：全局章节数据 ===
-let globalChapters = [];
-
-// 智能章节拆分：优先按 "Chapter 1 / CHAPTER I" 等拆；
-// 如果识别不到章节，就按段落均匀切成 ~50 段。
-function splitIntoChapters(text) {
-  if (!text) return [];
-
-  // 统一换行符
-  const normalized = text.replace(/\r\n/g, "\n");
-
-  // 几种常见章节格式的正则（前瞻，不丢掉章节标题）
-  const chapterPatterns = [
-    /(?=^Chapter\s+\d+)/gim,             // Chapter 1
-    /(?=^CHAPTER\s+\d+)/gm,              // CHAPTER 1
-    /(?=^CHAPTER\s+[IVXLCDM]+\.?)/gm,    // CHAPTER I, CHAPTER II ...
-  ];
-
-  for (const pattern of chapterPatterns) {
-    const parts = normalized.split(pattern)
-      .map(t => t.trim())
-      .filter(t => t.length > 0);
-
-    // 认为章节数至少得有 5 个才算真的章节结构
-    if (parts.length >= 5) {
-      console.log("Use chapter pattern split, chapters:", parts.length);
-      return parts;
-    }
-  }
-
-  // 如果上面的几种格式都没识别出来，就按“段落”切
-  let paragraphs = normalized
-    .split(/\n\s*\n+/)            // 空行分段
-    .map(t => t.trim())
-    .filter(t => t.length > 0);
-
-  // 段落数本来就不多（<= 50），那就直接当“章节”用
-  if (paragraphs.length <= 50) {
-    console.log("Use paragraphs as chapters:", paragraphs.length);
-    return paragraphs;
-  }
-
-  // 段落太多了：把它们均匀合并成 ~50 段
-  const targetParts = 50;
-  const size = Math.ceil(paragraphs.length / targetParts);
-  const merged = [];
-  for (let i = 0; i < paragraphs.length; i += size) {
-    merged.push(paragraphs.slice(i, i + size).join("\n\n"));
-  }
-  console.log("Use merged paragraphs as chapters:", merged.length);
-  return merged;
-}
-
-
 const uploadBtn = document.getElementById("uploadBtn");
 const fileInput = document.getElementById("fileInput");
 const statusEl = document.getElementById("status");
@@ -88,11 +33,6 @@ uploadBtn.addEventListener("click", async () => {
 
   statusEl.textContent = "Analyzing... (this may take a minute)";
 
-  // 在前端读取原始文本，拆成章节，给 timeline 用
-  const rawText = await file.text();
-  globalChapters = splitIntoChapters(rawText);
-  console.log("Chapters from file:", globalChapters.length);
-
   const formData = new FormData();
   formData.append("file", file);
 
@@ -119,7 +59,6 @@ function drawGraph(data) {
 
   const width = svg.clientWidth;
   const height = svg.clientHeight;
-
 
    // 节点半径、力参数都做轻微调整，避免重叠太严重
   const fg = ForceGraph(
@@ -214,9 +153,14 @@ function drawGraph(data) {
       // 1. 在 Character details 显示：这个角色 + 邻居 + 各自出现次数 & 共现次数
       showCharacterDetails(d.id);
 
-      // 2. 计算并渲染该角色的时间线
-      const timelineData = buildCharacterTimeline(d.id, globalChapters);
+      // 2. 从后端返回的 timeline 取出该角色的时间线
+      const counts = (data.timeline && data.timeline[d.id]) || [];
+      const timelineData = counts.map((c, idx) => ({
+        chapter: idx + 1,
+        count: c,
+      }));
       renderCharacterTimeline(timelineData);
+
 
       // 3. 高亮这个点以及所有与它相连的线（你原来的代码照旧保留）
       graphNodes.forEach((node) => {
@@ -341,7 +285,7 @@ function drawGraph(data) {
   observer.observe(line, { attributes: true });
 });
 
-    // ==== Character Details：显示中心角色 + 邻居列表 ====
+  // ==== Character Details：显示中心角色 + 邻居列表 ====
   function showCharacterDetails(centerId) {
     if (!centerId) return;
 
@@ -476,27 +420,24 @@ function drawGraph(data) {
 
     const d = node.__data__;
 
-    //
     // 1️⃣ 更新 Character Details
-    //
     detailsEl.innerHTML = `
       <h3>🧍 ${d.id}</h3>
       <p>Appears <b>${d.value}</b> times in text.</p>
       <p>Click a connection line to see shared scenes.</p>
     `;
 
-    //
-    // 2️⃣ 更新时间线
-    //
-    const timelineData = buildCharacterTimeline(d.id, globalChapters);
+    // 2️⃣ 更新时间线（用后端 timeline）
+    const counts = (data.timeline && data.timeline[d.id]) || [];
+    const timelineData = counts.map((c, idx) => ({
+      chapter: idx + 1,
+      count: c,
+    }));
     renderCharacterTimeline(timelineData);
 
-    //
     // 3️⃣ 在图中高亮并居中
-    //
     focusCharacterOnGraph(name);
   };
-
 
         // 搜索：过滤 + 自动高亮第一个匹配
     if (searchInput) {
@@ -535,30 +476,12 @@ function drawGraph(data) {
               || parts.some(p => p.includes(q)); // 任意单词包含
           })
   : nodesWithValue;
-
-
+  
         renderCharList(filtered);
       };
     }
   }
 
-}
-
-// === 构建某个角色在各章节的出现次数 ===
-function buildCharacterTimeline(characterName, chapters) {
-  if (!characterName || !chapters || chapters.length === 0) return [];
-
-  // 转义正则特殊字符
-  const escaped = characterName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(escaped, "gi");
-
-  return chapters.map((chapterText, i) => {
-    const matches = chapterText.match(pattern);
-    return {
-      chapter: i + 1,
-      count: matches ? matches.length : 0,
-    };
-  });
 }
 
 // === 用 d3 把 timelineData 画成折线图 ===
@@ -698,8 +621,10 @@ function focusCharacterOnGraph(name) {
   targetNode.setAttribute("fill", "#f00");
   // 同时高亮与它相连的线
   const connectedLinks = graphInnerSvg.querySelectorAll("line").forEach(line => {
-    const linkData = line.__data__;
-    if (linkData.source.id === d.id || linkData.target.id === d.id) {
+  const linkData = line.__data__;
+  const srcId = typeof linkData.source === "string" ? linkData.source : linkData.source.id;
+  const tgtId = typeof linkData.target === "string" ? linkData.target : linkData.target.id;
+  if (srcId === d.id || tgtId === d.id) {
       line.setAttribute("stroke", "#f00");
       line.setAttribute("stroke-opacity", "0.95");
       line.setAttribute("stroke-width", "3");
