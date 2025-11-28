@@ -47,7 +47,7 @@ uploadBtn.addEventListener("click", async () => {
   formData.append("file", file);
 
   try {
-    const res = await fetch("http://127.0.0.1:8000/analyze", {
+    const res = await fetch("http://127.0.0.1:8001/analyze", {//lzc此处只能用8001
       method: "POST",
       body: formData
     });
@@ -173,7 +173,51 @@ function drawGraph(data) {
 
     line.parentNode.insertBefore(hit, line.nextSibling);
 
-    // 2. 点击 hit 线时，展示上下文
+    //点击画面空白处取消所有选中状态
+    svg.addEventListener("click", (e) => {
+      if (e.target === svg) {
+        selectedEdgeKey = null;
+        // 重置所有连线样式
+        visibleLinks.forEach(l => {
+          l.setAttribute("stroke", "#999");
+          l.setAttribute("stroke-opacity", "0.6");
+          l.setAttribute("stroke-width", "1.5");
+        });
+        //重置所有节点样式
+        graphNodes.forEach(n => {
+          const nd = n.__data__;
+          const baseR = 3 + Math.log2(((nd?.value) ?? 0) + 1);
+          n.setAttribute("r", baseR);
+          n.setAttribute("stroke", "#fff");
+          n.setAttribute("stroke-width", "1.5");
+          n.setAttribute("fill", "black");
+        });
+      }
+    });
+
+    //悬停在线上时改变线的颜色
+    hit.addEventListener("mouseover", () => {
+      line.setAttribute("stroke", "#fa0");
+      line.setAttribute("stroke-opacity", "0.8");
+      line.setAttribute("stroke-width", "3");
+    });
+    hit.addEventListener("mouseout", () => {
+      // 如果当前不是选中状态，恢复原样
+      const key = [d.source.id, d.target.id].sort().join("|");
+      if (selectedEdgeKey !== key) {
+        line.setAttribute("stroke", "#999");
+        line.setAttribute("stroke-opacity", "0.6");
+        line.setAttribute("stroke-width", "1.5");
+      }
+    });
+    
+    //点击节点时调用highlightNodeAndConnections函数
+    hit.addEventListener("click", (e) => {
+      e.stopPropagation(); // 阻止事件冒泡，避免触发 SVG 的点击事件
+      highlightNodeAndConnections(d.source.id);
+    });
+
+    // 点击 hit 线时，展示上下文
     hit.addEventListener("click", () => {
       const key = [d.source.id, d.target.id].sort().join("|");
       const ctx = data.contexts[key];
@@ -295,7 +339,7 @@ function drawGraph(data) {
     }
   }
 
-  // ==== 邻居表版本的 Character Details（从你的代码搬过来） ====
+  // ==== 邻居表版本的 Character Details ====
   function showCharacterDetails(centerId, dataForChar) {
     if (!centerId || !dataForChar) return;
 
@@ -377,7 +421,7 @@ function drawGraph(data) {
   }
 }
 
-// ---------------- 用 d3 渲染人物 timeline 折线图（从你的版本搬过来） ----------------
+// ---------------- 用 d3 渲染人物 timeline 折线图 ----------------
 // timelineData: [{ chapter: 1, count: 3 }, ...]
 function renderCharacterTimeline(timelineData) {
   const svgEl = document.getElementById("timeline-svg");
@@ -483,7 +527,7 @@ function renderCharacterTimeline(timelineData) {
     .text(d => `Chapter ${d.chapter}: ${d.count} time(s)`);
 }
 
-// ---------------- 高亮节点和连接的函数（保留你同学的版本） ----------------
+// ---------------- 高亮节点和连接的函数 ----------------
 function highlightNodeAndConnections(nodeName) {
   if (!graphInnerSvg || !nodeById.has(nodeName)) return;
 
@@ -505,7 +549,7 @@ function highlightNodeAndConnections(nodeName) {
     l.setAttribute("stroke-width", "1.5");
   });
 
-  // 高亮目标节点
+  // 高亮目标节点与其连接的边和邻居节点
   const targetNode = nodeById.get(nodeName);
   if (targetNode) {
     const d = targetNode.__data__;
@@ -513,27 +557,28 @@ function highlightNodeAndConnections(nodeName) {
     targetNode.setAttribute("r", baseR * 1.5);
     targetNode.setAttribute("stroke", "#ff5733");
     targetNode.setAttribute("stroke-width", "3");
-    targetNode.setAttribute("fill", "#ffcc00");
+    targetNode.setAttribute("fill", "#ffbd69");
+    // 高亮连接的边和邻居节点
+    const connectedLinks = Array.from(allLinks).filter(l => {
+      const ld = l.__data__;
+      return ld.source.id === nodeName || ld.target.id === nodeName;
+    });
 
-    // 高亮相连的连线
-    allLinks.forEach(line => {
-      const linkData = line.__data__;
-      if (linkData.source.id === nodeName || linkData.target.id === nodeName) {
-        line.setAttribute("stroke", "#ff5733");
-        line.setAttribute("stroke-opacity", "0.95");
-        line.setAttribute("stroke-width", "3");
-      }
+    connectedLinks.forEach(l => {
+      l.setAttribute("stroke", "#ff5733");
+      l.setAttribute("stroke-opacity", "0.9");
+      l.setAttribute("stroke-width", "3");
     });
 
     // 居中显示
-    if (d.x && d.y) {
-      const zoom = 2.0;
+    /*if (d.x && d.y) {
+      const zoom = 1.25;
       const vbWidth = graphWidth / zoom;
       const vbHeight = graphHeight / zoom;
       const centerX = d.x - vbWidth / 2;
       const centerY = d.y - vbHeight / 2;
       graphInnerSvg.setAttribute("viewBox", `${centerX} ${centerY} ${vbWidth} ${vbHeight}`);
-    }
+    }*/
   }
 }
 

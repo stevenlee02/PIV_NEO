@@ -65,7 +65,7 @@ svg {
   font-size: 0.9rem;
 }
 
-/* ==== 文本输入分析区域（你同学的） ==== */
+/* ==== 文本输入分析区域==== */
 #article-section {
   margin-top: 2rem;
   padding: 1rem;
@@ -97,7 +97,7 @@ svg {
   background-color: #45a049;
 }
 
-/* ==== Neighbor Table Style（你的邻居表样式） ==== */
+/* ==== Neighbor Table Style ==== */
 .neighbors-table {
   width: 100%;
   border-collapse: collapse;
