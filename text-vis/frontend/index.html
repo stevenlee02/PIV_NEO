@@ -35,7 +35,12 @@
 
     #details {
       margin-bottom: 1rem;
+      max-height: 40vh;      /* 这一块最多占屏幕高度的 40%（你可以调大调小） */
+      overflow-y: auto;      /* 超出就出现竖向滚动条 */
+      padding-right: 8px;    /* 给滚动条留点空间，文字不会被挡住 */
+      box-sizing: border-box;
     }
+
 
     /* 搜索框样式 */
     #charSearch {

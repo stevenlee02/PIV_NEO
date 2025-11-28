@@ -88,7 +88,7 @@ uploadBtn.addEventListener("click", async () => {
 
   statusEl.textContent = "Analyzing... (this may take a minute)";
 
-  // ✅ 在前端读取原始文本，拆成章节，给 timeline 用
+  // 在前端读取原始文本，拆成章节，给 timeline 用
   const rawText = await file.text();
   globalChapters = splitIntoChapters(rawText);
   console.log("Chapters from file:", globalChapters.length);
@@ -98,7 +98,7 @@ uploadBtn.addEventListener("click", async () => {
 
   //csy此处为8000，lzc改为8001才能运行
   try {
-    const res = await fetch("http://127.0.0.1:8001/analyze", {
+    const res = await fetch("http://127.0.0.1:8000/analyze", {
       method: "POST",
       body: formData
     });
@@ -205,23 +205,20 @@ function drawGraph(data) {
     });
   });*/
 
-  // 点击节点显示人物详情 + 更新时间线
+    // 点击节点显示人物详情 + 更新时间线
   graphNodes.forEach(n => {
     n.addEventListener("click", () => {
       const d = n.__data__;
       console.log("clicked node:", d);
 
-      detailsEl.innerHTML = `
-        <h3>🧍 ${d.id}</h3>
-        <p>Appears <b>${d.value}</b> times in text.</p>
-        <p>Click a connection line to see shared scenes.</p>
-      `;
+      // 1. 在 Character details 显示：这个角色 + 邻居 + 各自出现次数 & 共现次数
+      showCharacterDetails(d.id);
 
-      // 计算并渲染该角色的时间线
+      // 2. 计算并渲染该角色的时间线
       const timelineData = buildCharacterTimeline(d.id, globalChapters);
       renderCharacterTimeline(timelineData);
 
-      // 高亮这个点以及所有与它相连的线
+      // 3. 高亮这个点以及所有与它相连的线（你原来的代码照旧保留）
       graphNodes.forEach((node) => {
         const nodeData = node.__data__;
         if (nodeData.id === d.id) {
@@ -256,6 +253,7 @@ function drawGraph(data) {
       focusCharacterOnGraph(d.id);
     });
   });
+
 
  // 点击连线显示上下文片段（与后端 sorted key 对齐）
   const visibleLinks = fg.querySelectorAll("line");
@@ -342,6 +340,87 @@ function drawGraph(data) {
   });
   observer.observe(line, { attributes: true });
 });
+
+    // ==== Character Details：显示中心角色 + 邻居列表 ====
+  function showCharacterDetails(centerId) {
+    if (!centerId) return;
+
+    // 1. 找到中心角色本身
+    const centerNode = data.nodes.find(n => n.id === centerId);
+    const centerCount = centerNode ? (centerNode.value ?? 0) : 0;
+
+    // 2. 从所有边中找出与它相连的邻居
+    //    注意：source/target 可能是字符串，也可能已经被 d3 改成对象
+    const neighborMap = new Map(); // id -> { id, count, cooccurrence }
+
+    data.links.forEach(l => {
+      const srcId = typeof l.source === "string" ? l.source : l.source.id;
+      const tgtId = typeof l.target === "string" ? l.target : l.target.id;
+      const val = l.value ?? 0;
+
+      if (srcId === centerId || tgtId === centerId) {
+        const otherId = srcId === centerId ? tgtId : srcId;
+
+        // 邻居自身出现次数
+        const neighborNode = data.nodes.find(n => n.id === otherId);
+        const neighborCount = neighborNode ? (neighborNode.value ?? 0) : 0;
+
+        if (!neighborMap.has(otherId)) {
+          neighborMap.set(otherId, {
+            id: otherId,
+            count: neighborCount,
+            cooccurrence: 0,
+          });
+        }
+        const entry = neighborMap.get(otherId);
+        entry.cooccurrence += val;   // 多条边时累加共现次数
+      }
+    });
+
+    // 3. 排序：按与中心角色的共现次数从大到小
+    const neighbors = Array.from(neighborMap.values())
+      .sort((a, b) => b.cooccurrence - a.cooccurrence);
+
+    // 4. 生成 HTML
+    let html = `
+      <h3>🧍 ${centerId}</h3>
+      <p>Appears <b>${centerCount}</b> times in text.</p>
+    `;
+
+      if (neighbors.length === 0) {
+        html += `<p>No neighbor characters.</p>`;
+      } else {
+        html += `
+          <details class="neighbors-block" open>
+            <summary>Neighbors (${neighbors.length})</summary>
+            <div class="neighbors-table-wrapper">
+              <table class="neighbors-table">
+                <thead>
+                  <tr>
+                    <th>Character</th>
+                    <th>Appearances</th>
+                    <th>Co-occurrences<br>with ${centerId}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${
+                    neighbors.map(n => `
+                      <tr>
+                        <td>${n.id}</td>
+                        <td>${n.count}</td>
+                        <td>${n.cooccurrence}</td>
+                      </tr>
+                    `).join("")
+                  }
+                </tbody>
+              </table>
+            </div>
+          </details>
+        `;
+      }
+
+    detailsEl.innerHTML = html;
+  }
 
   svg.appendChild(fg);
 
