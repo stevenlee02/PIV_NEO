@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>📖 Character Network Visualization</title>
+  <!-- d3 给 timeline 用（code.js 也会 import d3 module，但这个不冲突，你可以保留） -->
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
     body {
@@ -20,9 +21,9 @@
       padding: 1rem;
     }
 
-    /* 右侧：详情 + 列表 */
+    /* 右侧：详情 + 时间线 + 列表 */
     #right {
-      flex: 2;                 /* 右侧更宽一点 */
+      flex: 2;
       min-width: 350px;
       max-width: 500px;
       border-left: 2px solid #ccc;
@@ -30,17 +31,16 @@
       background: #fff;
       display: flex;
       flex-direction: column;
-      height: 100vh;           /* 占满右侧高度 */
+      height: 100vh;
     }
 
     #details {
       margin-bottom: 1rem;
-      max-height: 40vh;      /* 这一块最多占屏幕高度的 40%（你可以调大调小） */
-      overflow-y: auto;      /* 超出就出现竖向滚动条 */
-      padding-right: 8px;    /* 给滚动条留点空间，文字不会被挡住 */
+      max-height: 40vh;      /* 上半部分详情区最高占 40% 高度 */
+      overflow-y: auto;
+      padding-right: 8px;
       box-sizing: border-box;
     }
-
 
     /* 搜索框样式 */
     #charSearch {
@@ -56,7 +56,7 @@
       margin-bottom: 0.5rem;
     }
 
-    /* 人物列表：可滚动，空间更大 */
+    /* 人物列表：可滚动 */
     #charList {
       flex: 2;
       max-height: none;
@@ -76,6 +76,44 @@
     h2 {
       text-align: center;
     }
+
+    /* 文本编辑器样式（你同学的部分） */
+    #context-editor {
+      margin-top: 1rem;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      background: #f9f9f9;
+      border-radius: 4px;
+    }
+
+    #linkContextEditor {
+      width: 100%;
+      height: 150px;
+      margin-bottom: 0.5rem;
+      padding: 0.5rem;
+      box-sizing: border-box;
+      font-family: monospace;
+      font-size: 0.9rem;
+    }
+
+    #saveContextBtn {
+      padding: 0.4rem 0.8rem;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+
+    #saveContextBtn:hover {
+      background: #45a049;
+    }
+
+    #edge-status {
+      font-size: 0.9rem;
+      color: #666;
+      margin-top: 0.5rem;
+    }
   </style>
 </head>
 <body>
@@ -85,6 +123,18 @@
     <input type="file" id="fileInput" accept=".txt" />
     <button id="uploadBtn">Analyze</button>
     <p id="status"></p>
+
+    <!-- 上下文编辑器（你同学的） -->
+    <div id="context-editor">
+      <h3>Edit Context</h3>
+      <textarea id="linkContextEditor" placeholder="Click a connection line to load and edit context..."></textarea>
+      <div>
+        <button id="saveContextBtn">Save Context</button>
+        <div id="edge-status">No edge selected</div>
+      </div>
+    </div>
+
+    <!-- 右侧 info：展示选中边的片段列表 -->
     <div id="info" style="
       border: 1px solid #ccc;
       background: #fff;
@@ -108,12 +158,12 @@
     <svg id="graph"></svg>
   </div>
 
-  <!-- 右侧：详情 + 时间线 + 列表 -->
+  <!-- 右侧：详情 + 时间线 + 列表 + 文本输入 -->
   <div id="right">
     <h2>Character Details</h2>
     <div id="details">Click a node to see details</div>
 
-    <!-- ✅ 角色时间线 -->
+    <!-- 角色时间线（你的） -->
     <div id="timeline-panel">
       <h3 style="text-align:center;">📈 Character Timeline</h3>
       <svg id="timeline-svg" width="100%" height="150"></svg>
@@ -121,22 +171,29 @@
 
     <h2 style="margin-top: 1rem;">All Characters</h2>
 
-    <!-- 搜索 + 排序（已经没有 reset 按钮了） -->
-    <div id="search-bar">
-      <input
-        id="charSearch"
-        type="text"
-        placeholder="Search character..."
-      />
-      <select id="sortMode">
-        <option value="freq">Sort by frequency of occurrence</option>
-        <option value="name">Sort by surname initial</option>
-      </select>
-    </div>
+<!-- 搜索 + 排序 -->
+<div id="search-bar">
+  <input
+    id="charSearch"
+    type="text"
+    placeholder="Search character..."
+  />
+  <select id="sortMode">
+    <option value="freq">Sort by frequency of occurrence</option>
+    <option value="name">Sort by surname initial</option>
+  </select>
+</div>
 
-    <!-- 人物列表 -->
-    <ul id="charList"></ul>
-  </div>
+<!-- 人物列表（紧贴搜索栏） -->
+<ul id="charList"></ul>
+
+<!-- 文本输入分析（移到人物列表下面） -->
+<div id="article-section">
+  <h2>Enter Text to Analyze</h2>
+  <textarea id="articleInput" rows="6" style="width:100%;"></textarea>
+  <button id="articleAnalyzeBtn">Save & Update Graph</button>
+  <p id="link-context-status"></p>
+</div>
 
   <script type="module" src="./code.js?v=2"></script>
 </body>

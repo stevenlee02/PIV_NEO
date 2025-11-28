@@ -1,11 +1,44 @@
-body { margin: 0; font-family: Arial, sans-serif; display: flex; height: 100vh; }
-#sidebar { width: 300px; padding: 15px; background: #f4f4f4; border-right: 1px solid #ccc; }
-#graph { flex: 1; background: white; }
-svg { width: 100%; height: 100%; }
-.node { stroke: #fff; stroke-width: 1.5px; cursor: pointer; }
-.link { stroke-opacity: 0.6; }
-#info { margin-top: 10px; font-size: 0.9em; color: #333; }
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  display: flex;
+  height: 100vh;
+}
 
+#sidebar {
+  width: 300px;
+  padding: 15px;
+  background: #f4f4f4;
+  border-right: 1px solid #ccc;
+}
+
+#graph {
+  flex: 1;
+  background: white;
+}
+
+svg {
+  width: 100%;
+  height: 100%;
+}
+
+.node {
+  stroke: #fff;
+  stroke-width: 1.5px;
+  cursor: pointer;
+}
+
+.link {
+  stroke-opacity: 0.6;
+}
+
+#info {
+  margin-top: 10px;
+  font-size: 0.9em;
+  color: #333;
+}
+
+/* ==== Timeline Panel ==== */
 #timeline-panel {
   margin-top: 0.5rem;
   margin-bottom: 1rem;
@@ -14,6 +47,7 @@ svg { width: 100%; height: 100%; }
   background: #fafafa;
 }
 
+/* ==== 搜索区域 ==== */
 #search-bar {
   display: flex;
   gap: 0.5rem;
@@ -31,7 +65,39 @@ svg { width: 100%; height: 100%; }
   font-size: 0.9rem;
 }
 
-/* ==== Neighbor Table Style ==== */
+/* ==== 文本输入分析区域（你同学的） ==== */
+#article-section {
+  margin-top: 2rem;
+  padding: 1rem;
+  background-color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+#articleInput {
+  width: 100%;
+  padding: 0.5rem;
+  font-size: 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+}
+
+#articleAnalyzeBtn {
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+#articleAnalyzeBtn:hover {
+  background-color: #45a049;
+}
+
+/* ==== Neighbor Table Style（你的邻居表样式） ==== */
 .neighbors-table {
   width: 100%;
   border-collapse: collapse;
@@ -62,6 +128,17 @@ svg { width: 100%; height: 100%; }
   list-style: none;
 }
 
+/* 防止 summary 前面出现小三角的默认样式 */
+.neighbors-block summary::-webkit-details-marker {
+  display: none;
+}
+
+/* 包住表格，限制高度 + 出滚动条，防止邻居太多撑爆右侧面板 */
+.neighbors-table-wrapper {
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-x: auto;
+}
 /* 防止 summary 前面出现小三角的默认样式（有些浏览器会有） */
 .neighbors-block summary::-webkit-details-marker {
   display: none;
