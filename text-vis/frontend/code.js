@@ -148,12 +148,14 @@ function drawGraph(data) {
         chapter: idx + 1,
         count: c,
       }));
+      // 渲染时间线
       renderCharacterTimeline(timelineData);
 
-      // 🔹 高亮节点 & 相连边 & 居中视图（使用同学原来的函数）
+      // 高亮节点 & 相连边 & 居中视图
       highlightNodeAndConnections(d.id);
     });
   });
+
 
   // 点击连线显示上下文片段
   const visibleLinks = fg.querySelectorAll("line");
@@ -279,6 +281,38 @@ function drawGraph(data) {
     });
     observer.observe(line, { attributes: true });
   });
+
+  // 监听鼠标滚轮实现缩放
+  let scale = 1;
+  svg.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const delta = -event.deltaY * 0.001;
+    scale += delta;
+    scale = Math.min(Math.max(0.1, scale), 5);
+    graphInnerSvg.setAttribute("transform", `scale(${scale})`);
+  });
+  // 监听鼠标拖拽实现平移
+  let isDragging = false;
+  let startX, startY;
+  let translateX = 0, translateY = 0;
+  svg.addEventListener("mousedown", (event) => {
+    isDragging = true;
+    startX = event.clientX - translateX;
+    startY = event.clientY - translateY;
+  });
+  svg.addEventListener("mousemove", (event) => {
+    if (isDragging) {
+      translateX = event.clientX - startX;
+      translateY = event.clientY - startY;
+      graphInnerSvg.setAttribute("transform", `translate(${translateX},${translateY}) scale(${scale})`);
+    }
+  });
+  svg.addEventListener("mouseup", () => {
+    isDragging = false;
+  });
+  svg.addEventListener("mouseleave", () => {
+    isDragging = false;
+  }); 
 
   svg.appendChild(fg);
 
@@ -529,7 +563,7 @@ function renderCharacterTimeline(timelineData) {
 
 // ---------------- 高亮节点和连接的函数 ----------------
 function highlightNodeAndConnections(nodeName) {
-  if (!graphInnerSvg || !nodeById.has(nodeName)) return;
+  if (!nodeById.has(nodeName) || !graphInnerSvg) return;
 
   // 重置所有节点样式
   graphNodes.forEach(n => {
@@ -549,37 +583,32 @@ function highlightNodeAndConnections(nodeName) {
     l.setAttribute("stroke-width", "1.5");
   });
 
-  // 高亮目标节点与其连接的边和邻居节点
-  const targetNode = nodeById.get(nodeName);
-  if (targetNode) {
-    const d = targetNode.__data__;
-    const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
-    targetNode.setAttribute("r", baseR * 1.5);
-    targetNode.setAttribute("stroke", "#ff5733");
-    targetNode.setAttribute("stroke-width", "3");
-    targetNode.setAttribute("fill", "#ffbd69");
-    // 高亮连接的边和邻居节点
-    const connectedLinks = Array.from(allLinks).filter(l => {
-      const ld = l.__data__;
-      return ld.source.id === nodeName || ld.target.id === nodeName;
-    });
+  // 高亮选中节点，直到点击其他地方重置
+  const selectedNode = nodeById.get(nodeName);
+  selectedNode.setAttribute("fill", "red");
+  selectedNode.setAttribute("stroke", "black");
+  selectedNode.setAttribute("stroke-width", "2");
 
-    connectedLinks.forEach(l => {
-      l.setAttribute("stroke", "#ff5733");
+  // 高亮与该节点相连的边和邻居节点，直到点击其他地方重置
+  allLinks.forEach(l => {
+    const d = l.__data__;
+    const srcId = typeof d.source === "string" ? d.source : d.source.id;
+    const tgtId = typeof d.target === "string" ? d.target : d.target.id;
+    if (srcId === nodeName || tgtId === nodeName) {
+      // 高亮边
+      l.setAttribute("stroke", "red");
       l.setAttribute("stroke-opacity", "0.9");
       l.setAttribute("stroke-width", "3");
-    });
-
-    // 居中显示
-    /*if (d.x && d.y) {
-      const zoom = 1.25;
-      const vbWidth = graphWidth / zoom;
-      const vbHeight = graphHeight / zoom;
-      const centerX = d.x - vbWidth / 2;
-      const centerY = d.y - vbHeight / 2;
-      graphInnerSvg.setAttribute("viewBox", `${centerX} ${centerY} ${vbWidth} ${vbHeight}`);
-    }*/
-  }
+      // 高亮邻居节点
+      const neighborId = srcId === nodeName ? tgtId : srcId;
+      const neighborNode = nodeById.get(neighborId);
+      if (neighborNode) {
+        neighborNode.setAttribute("fill", "orange");
+        neighborNode.setAttribute("stroke", "black");
+        neighborNode.setAttribute("stroke-width", "2");
+      }
+    }
+  });
 }
 
 // ---------------- 重置视图函数 ----------------
