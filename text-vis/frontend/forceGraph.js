@@ -88,7 +88,7 @@ export function ForceGraph({ nodes, links }, {
     .selectAll("line")
     .data(links)
     .join("line")
-    .attr("class", "link");        // ✅ 保留你同学的 class
+    .attr("class", "link");        
 
   const node = svg.append("g")
     .attr("fill", nodeFill)
@@ -99,7 +99,7 @@ export function ForceGraph({ nodes, links }, {
     .data(nodes)
     .join("circle")
     .attr("r", nodeRadius)
-    .attr("class", "node")         // ✅ 保留你同学的 class
+    .attr("class", "node")         
     .call(drag(simulation));
 
   // ✅ 从你同学那版搬来的 hover 高亮：悬停节点 & 相连边

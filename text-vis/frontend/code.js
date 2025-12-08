@@ -110,7 +110,7 @@ function drawGraph(data) {
       nodeId: d => d.id,
       nodeTitle: d => `${d.id}\nCount: ${d.value}`,
       nodeRadius: d => 3 + Math.log2((d.value ?? 0) + 1),
-      linkStrokeWidth: d => 0.3 + Math.sqrt(d.value) * 0.3,
+      linkStrokeWidth: d => 0.5 + Math.sqrt(d.value) * 0.5,
       nodeStrength: -300,
       linkStrength: 0.05,
       width,
@@ -150,8 +150,7 @@ function drawGraph(data) {
       }));
       // 渲染时间线
       renderCharacterTimeline(timelineData);
-
-      // 高亮节点 & 相连边 & 居中视图
+      // 高亮节点和连接
       highlightNodeAndConnections(d.id);
     });
   });
@@ -236,7 +235,7 @@ function drawGraph(data) {
       line.setAttribute("stroke-opacity", "0.95");
       line.setAttribute("stroke-width", "3");
 
-      // 更新右侧文本编辑器和信息面板
+      // 更新文本编辑器和右侧信息面板
       if (!ctx || ctx.length === 0) {
         if (linkContextEditor) linkContextEditor.value = "";
         if (edgeStatusEl) edgeStatusEl.textContent = `Selected: ${key}`;
@@ -256,8 +255,8 @@ function drawGraph(data) {
               <div style="margin-bottom: 1rem;">
                 <blockquote>${text.trim()}</blockquote>
                 <div style="margin-top: 0.5rem;">
-                  <button onclick="editContextWithData('${d.source.id}', '${d.target.id}', ${idx})">Edit</button>
-                  <button onclick="deleteContext('${d.source.id}', '${d.target.id}', ${idx})" style="margin-left: 0.5rem;">Delete</button>
+                  <button onclick="editContextWithData('${d.source.id}', '${d.target.id}', ${idx})" style="margin-left: 0.5rem; width:100px">Edit</button>
+                  <button onclick="deleteContext('${d.source.id}', '${d.target.id}', ${idx})" style="margin-left: 0.5rem; width:100px">Delete</button>
                 </div>
               </div>
             `;
@@ -563,26 +562,36 @@ function renderCharacterTimeline(timelineData) {
 
 // ---------------- 高亮节点和连接的函数 ----------------
 function highlightNodeAndConnections(nodeName) {
-  if (!nodeById.has(nodeName) || !graphInnerSvg) return;
+  if (!graphInnerSvg || !nodeById.has(nodeName)) return;
 
-  // 重置所有节点样式
-  graphNodes.forEach(n => {
-    const d = n.__data__;
-    const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
-    n.setAttribute("r", baseR);
-    n.setAttribute("stroke", "#fff");
-    n.setAttribute("stroke-width", "1.5");
-    n.setAttribute("fill", "black");
-  });
-
-  // 重置所有连线样式
+  // 重置视图
+  resetGraphView();
   const allLinks = graphInnerSvg.querySelectorAll("line");
+  const selectedNode = nodeById.get(nodeName);
+  selectedNode.setAttribute("fill", "red");
+  selectedNode.setAttribute("stroke", "black");
+  selectedNode.setAttribute("stroke-width", "2");
+  // 高亮与该节点相连的边和邻居节点
   allLinks.forEach(l => {
-    l.setAttribute("stroke", "#999");
-    l.setAttribute("stroke-opacity", "0.6");
-    l.setAttribute("stroke-width", "1.5");
+    const d = l.__data__;
+    const srcId = typeof d.source === "string" ? d.source : d.source.id;
+    const tgtId = typeof d.target === "string" ? d.target : d.target.id;
+    if (srcId === nodeName || tgtId === nodeName) {
+      // 高亮边
+      l.setAttribute("stroke", "red");
+      l.setAttribute("stroke-opacity", "0.9");
+      l.setAttribute("stroke-width", "3");
+      // 高亮所有的邻居
+      const neighborId = srcId === nodeName ? tgtId : srcId;
+      const neighborNode = nodeById.get(neighborId);
+      if (neighborNode) {
+        neighborNode.setAttribute("fill", "orange");
+        neighborNode.setAttribute("stroke", "black");
+        neighborNode.setAttribute("stroke-width", "2");
+      }
+    }
   });
-
+/*
   // 高亮选中节点，直到点击其他地方重置
   const selectedNode = nodeById.get(nodeName);
   selectedNode.setAttribute("fill", "red");
@@ -609,6 +618,7 @@ function highlightNodeAndConnections(nodeName) {
       }
     }
   });
+*/
 }
 
 // ---------------- 重置视图函数 ----------------
