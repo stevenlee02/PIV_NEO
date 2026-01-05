@@ -1,7 +1,3 @@
-// Copyright 2021-2024 Observable, Inc.
-// Released under the ISC license.
-// https://observablehq.com/@d3/force-directed-graph
-
 import * as d3 from "https://cdn.skypack.dev/d3@7";
 
 export function ForceGraph({ nodes, links }, {
@@ -39,14 +35,12 @@ export function ForceGraph({ nodes, links }, {
   const W = typeof linkStrokeWidth !== "function" ? null : d3.map(links, linkStrokeWidth);
   const L = typeof linkStroke !== "function" ? null : d3.map(links, linkStroke);
 
-  // ✅ 保留原节点属性 + 默认 value
   nodes = d3.map(nodes, (node, i) => ({
     ...node,
     id: N[i],
     value: node.value ?? 1,
   }));
 
-  // ✅ 链补上 value（你同学那版有这个，用来画粗线）
   links = d3.map(links, (link, i) => ({
     source: LS[i],
     target: LT[i],
@@ -56,10 +50,8 @@ export function ForceGraph({ nodes, links }, {
   if (G && nodeGroups === undefined) nodeGroups = d3.sort(G);
   const color = nodeGroup == null ? null : d3.scaleOrdinal(nodeGroups, colors);
 
-  // 节点之间的排斥力（负数越大，节点越分散）
   const forceNode = d3.forceManyBody();
 
-  // 链接长度设置大一点，让节点不要贴得太近
   const forceLink = d3.forceLink(links)
     .id((d, i) => N[i])
     .distance(120)
@@ -80,6 +72,10 @@ export function ForceGraph({ nodes, links }, {
     .attr("viewBox", [-width/2, -height/2, width, height])
     .attr("style", "max-width:100%;height:auto;height:intrinsic;");
 
+  const valueExtent = d3.extent(nodes, d => d.value ?? 1);
+  const valueColor = d3.scaleSequential(d3.interpolateTurbo)
+    .domain([valueExtent[0] ?? 1, valueExtent[1] ?? 10]);
+
   const link = svg.append("g")
     .attr("stroke", typeof linkStroke !== "function" ? linkStroke : null)
     .attr("stroke-opacity", linkStrokeOpacity)
@@ -88,10 +84,9 @@ export function ForceGraph({ nodes, links }, {
     .selectAll("line")
     .data(links)
     .join("line")
-    .attr("class", "link");        // ✅ 保留你同学的 class
+    .attr("class", "link");
 
   const node = svg.append("g")
-    .attr("fill", nodeFill)
     .attr("stroke", nodeStroke)
     .attr("stroke-opacity", nodeStrokeOpacity)
     .attr("stroke-width", nodeStrokeWidth)
@@ -99,43 +94,58 @@ export function ForceGraph({ nodes, links }, {
     .data(nodes)
     .join("circle")
     .attr("r", nodeRadius)
-    .attr("class", "node")         // ✅ 保留你同学的 class
+    .attr("class", "node")
+    .attr("fill", d => {
+      const fill = (G ? color(G[d.index]) : valueColor(d.value ?? 1));
+      d.__baseFill = fill;
+      return fill;
+    })
     .call(drag(simulation));
 
-  // ✅ 从你同学那版搬来的 hover 高亮：悬停节点 & 相连边
   node.on("mouseenter", function (event, d) {
-    // 高亮节点
     d3.select(this)
-      .attr("fill", "orange")
-      .attr("stroke", "black")
-      .attr("stroke-width", 2);
+      .attr("stroke", "#ffffff")
+      .attr("stroke-width", 3);
 
-    // 高亮与该节点相连的边
     link
       .filter(l => l.source.id === d.id || l.target.id === d.id)
-      .attr("stroke", "orange")
-      .attr("stroke-width", 3);
+      .attr("stroke", "rgba(110,168,255,.95)")
+      .attr("stroke-width", 3)
+      .attr("stroke-opacity", 0.95);
   }).on("mouseleave", function (event, d) {
-    // 恢复节点颜色
     d3.select(this)
-      .attr("fill", nodeFill)
+      .attr("fill", d.__baseFill ?? (G ? color(G[d.index]) : valueColor(d.value ?? 1)))
       .attr("stroke", nodeStroke)
       .attr("stroke-width", nodeStrokeWidth);
 
-    // 恢复与该节点相连的边颜色
     link
       .filter(l => l.source.id === d.id || l.target.id === d.id)
-      .attr("stroke", linkStroke)
+      .attr("stroke", typeof linkStroke !== "function" ? linkStroke : null)
       .attr("stroke-width", typeof linkStrokeWidth === "function"
         ? (l, i) => W ? W[i] : 1.5
         : linkStrokeWidth
-      );
+      )
+      .attr("stroke-opacity", linkStrokeOpacity);
+  });
+
+  node.on("click", function (event, d) {
+    svg.node().dispatchEvent(new CustomEvent("nodeclick", {
+      detail: { id: d.id, node: d },
+      bubbles: true
+    }));
   });
 
   if (W) link.attr("stroke-width", ({index:i}) => W[i]);
   if (L) link.attr("stroke",       ({index:i}) => L[i]);
-  if (G) node.attr("fill",         ({index:i}) => color(G[i]));
-  if (R) node.attr("r",            ({index:i}) => R[i]);
+
+  if (G) node.each(function({index:i}) {
+    const d = nodes[i];
+    const fill = color(G[i]);
+    d.__baseFill = fill;
+    d3.select(this).attr("fill", fill);
+  });
+
+  if (R) node.attr("r", ({index:i}) => R[i]);
   if (T) node.append("title").text(({index:i}) => T[i]);
 
   if (invalidation != null) invalidation.then(() => simulation.stop());

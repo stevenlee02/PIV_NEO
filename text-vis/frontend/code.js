@@ -1,116 +1,264 @@
 import { ForceGraph } from "./forceGraph.js";
-import * as d3 from "https://cdn.skypack.dev/d3@7"; // 🔹 新增：用于画 timeline 折线图
+import * as d3 from "https://cdn.skypack.dev/d3@7";
 
 // ---------------- 全局状态 ----------------
-let currentGraphData = null; // 用于保存当前图形数据
-let selectedEdgeKey = null;  // 当前选中的边
-let graphInnerSvg = null;    // 添加这个全局引用
-let graphNodes = [];         // 添加节点引用
-let nodeById = new Map();    // 添加节点映射
+let currentGraphData = null; // {nodes, links, contexts, timeline, ...}
+let selectedEdgeKey = null; // "A|B"
+let selectedNodeId = null; // "A"
+let activePanel = "timeline"; // timeline | neighbors | contexts | allchars
+
+let graphInnerSvg = null; // ForceGraph 返回的 <svg>
+let graphNodes = []; // circles
+let graphLinks = []; // lines（真实边，不含 hit 线）
+let nodeById = new Map(); // id -> circle
 let graphWidth = 0;
 let graphHeight = 0;
 
-// ---------------- DOM refs ----------------
-const uploadBtn = document.getElementById("uploadBtn"); // 在不影响这些代码的基础上把 timeline 和 neighbor 搬到这个版本上
+let labelLayer = null; // <g> 用于 labels
+let rafLabelLoop = null; // requestAnimationFrame id
+let labelItems = []; // {textEl, nodeDataRef, dx, dy}
+
+// ---------------- DOM 引用 ----------------
+const uploadBtn = document.getElementById("uploadBtn");
 const fileInput = document.getElementById("fileInput");
 const statusEl = document.getElementById("status");
-const infoEl = document.getElementById("info");
-const svg = document.getElementById("graph");
-const detailsEl = document.getElementById("details");
-const resetViewBtn = document.getElementById("resetViewBtn"); // 添加reset按钮引用
 
-// ---------------- 新增：文本编辑器相关元素 ----------------
+const svgOuter = document.getElementById("graph"); // 外层 <svg id="graph">
+
+// Contexts（右侧 contexts panel 内）
+const infoEl = document.getElementById("info");
 const linkContextEditor = document.getElementById("linkContextEditor");
 const saveContextBtn = document.getElementById("saveContextBtn");
 const edgeStatusEl = document.getElementById("edge-status");
 
-// ---------------- 新增：文本输入分析相关元素 ----------------
+// Enter Text to Analyze（左侧）
 const articleInput = document.getElementById("articleInput");
 const articleAnalyzeBtn = document.getElementById("articleAnalyzeBtn");
 
+// 右侧容器
+const rightScroll = document.getElementById("rightScroll");
+const toggleBar = document.getElementById("panelToggles");
+
+// panels
+const detailsEl = document.getElementById("details");
+const resetViewBtn = document.getElementById("resetViewBtn");
+
+// ---------------- 工具函数 ----------------
+function normalizeId(x) {
+  if (!x) return "";
+  if (typeof x === "string") return x;
+  if (typeof x === "object" && x.id) return x.id;
+  return String(x);
+}
+function makeEdgeKey(a, b) {
+  return [a, b].sort().join("|");
+}
+
+function ensureArrayContexts(entryArr) {
+  const arr = Array.isArray(entryArr) ? entryArr : [];
+  return arr.map((e) => {
+    if (typeof e === "string") return { text: e, chapters: [] };
+    if (e && typeof e.text === "string")
+      return { text: e.text, chapters: Array.isArray(e.chapters) ? e.chapters : [] };
+    return { text: String(e ?? ""), chapters: [] };
+  });
+}
+
+function computeAdjacencyFromLinks(data) {
+  const adj = new Map(); // id -> Map(neighbor -> weight)
+
+  function ensure(id) {
+    if (!adj.has(id)) adj.set(id, new Map());
+    return adj.get(id);
+  }
+
+  (data?.links || []).forEach((l) => {
+    const s = normalizeId(l.source);
+    const t = normalizeId(l.target);
+    const w = Number(l.value ?? 0);
+    if (!s || !t) return;
+    ensure(s).set(t, (ensure(s).get(t) || 0) + w);
+    ensure(t).set(s, (ensure(t).get(s) || 0) + w);
+  });
+
+  return adj;
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+// ---------------- 外层 svg 尺寸自适应 ----------------
 function resizeSVG() {
-  graphWidth = window.innerWidth - 100;
-  graphHeight = window.innerHeight - 200;
-  svg.setAttribute("width", graphWidth);
-  svg.setAttribute("height", graphHeight);
+  if (!svgOuter) return;
+  graphWidth = svgOuter.clientWidth || Math.floor(window.innerWidth * 0.6);
+  graphHeight = svgOuter.clientHeight || Math.floor(window.innerHeight * 0.7);
+  svgOuter.setAttribute("width", graphWidth);
+  svgOuter.setAttribute("height", graphHeight);
 }
 resizeSVG();
 window.addEventListener("resize", resizeSVG);
 
-// ---------------- 文件上传分析 ----------------
-uploadBtn.addEventListener("click", async () => {
-  const file = fileInput.files[0];
-  if (!file) return alert("Please select a file first.");
+// ---------------- setPanel（额外强制隐藏 contexts 的两块） ----------------
+function setPanel(panelId) {
+  activePanel = panelId;
 
-  statusEl.textContent = "Analyzing... (this may take a minute)";
+  // toggle 按钮高亮
+  toggleBar?.querySelectorAll("button[data-panel]").forEach((b) => {
+    b.classList.toggle("active", b.getAttribute("data-panel") === panelId);
+  });
+
+  // panel 显示/隐藏（只管 .panel）
+  rightScroll?.querySelectorAll(".panel").forEach((p) => {
+    const id = p.getAttribute("data-panel");
+    p.classList.toggle("hidden", id !== panelId);
+  });
+
+  // 强制：contexts 的两块在非 contexts 时一律隐藏（防止被错误留在别的面板里）
+  const ctxEditorCard = document.getElementById("context-editor");
+  const ctxInfoCard = document.getElementById("info");
+  if (panelId !== "contexts") {
+    ctxEditorCard && (ctxEditorCard.style.display = "none");
+    ctxInfoCard && (ctxInfoCard.style.display = "none");
+  } else {
+    ctxEditorCard && (ctxEditorCard.style.display = "");
+    ctxInfoCard && (ctxInfoCard.style.display = "");
+  }
+}
+
+if (toggleBar) {
+  toggleBar.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-panel]");
+    if (!btn) return;
+    setPanel(btn.getAttribute("data-panel"));
+  });
+}
+
+// 初始显示 Timeline
+setPanel(activePanel);
+
+// ---------------- API 请求 ----------------
+async function postFileAnalyze(file) {
   const formData = new FormData();
   formData.append("file", file);
 
-  try {
-    const res = await fetch("http://127.0.0.1:8000/analyze", {
-      method: "POST",
-      body: formData
-    });
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    statusEl.textContent = "Done!";
-    drawGraph(data);
-  } catch (err) {
-    console.error("❌ Backend error:", err);
-    statusEl.textContent = "Error occurred.";
-  }
-});
+  const res = await fetch("http://127.0.0.1:8000/analyze", {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
+}
 
-// ---------------- 新增：文本输入分析 ----------------
+async function postTextAnalyze(text) {
+  const res = await fetch("http://127.0.0.1:8000/analyze-text", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
+}
+
+if (uploadBtn) {
+  uploadBtn.addEventListener("click", async () => {
+    const file = fileInput?.files?.[0];
+    if (!file) return alert("Please select a file first.");
+
+    statusEl && (statusEl.textContent = "Analyzing... (this may take a minute)");
+    try {
+      const data = await postFileAnalyze(file);
+      statusEl && (statusEl.textContent = "Done!");
+      drawGraph(data);
+    } catch (err) {
+      console.error("❌ Backend error:", err);
+      statusEl && (statusEl.textContent = "Error occurred.");
+    }
+  });
+}
+
 if (articleAnalyzeBtn && articleInput) {
   articleAnalyzeBtn.addEventListener("click", async () => {
     const text = articleInput.value.trim();
     if (!text) return alert("Please paste or write text to analyze.");
 
-    statusEl.textContent = "Analyzing... (this may take a minute)";
-    
+    statusEl && (statusEl.textContent = "Analyzing... (this may take a minute)");
     try {
-      const res = await fetch("http://127.0.0.1:8001/analyze-text", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text })
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      statusEl.textContent = "Done!";
+      const data = await postTextAnalyze(text);
+      statusEl && (statusEl.textContent = "Done!");
       drawGraph(data);
     } catch (err) {
       console.error("❌ Backend error:", err);
-      statusEl.textContent = "Error occurred.";
+      statusEl && (statusEl.textContent = "Error occurred.");
     }
   });
 }
 
-function drawGraph(data) {
-  // 保存数据到全局状态
+// ---------------- 核心：选中节点（更新 Timeline + Character + Flower + 图强调） ----------------
+function selectNode(id) {
+  if (!currentGraphData || !id) return;
+  selectedNodeId = id;
+
+  // 图强调（邻居大小/颜色 + 淡化无关 + labels）
+  applyGraphEmphasis(id);
+
+  // Character panel
+  showCharacterDetails(id);
+
+  // Timeline panel
+  const counts = (currentGraphData.timeline && currentGraphData.timeline[id]) || [];
+  const timelineData = counts.map((c, idx) => ({ chapter: idx + 1, count: c }));
+  renderCharacterTimeline(timelineData);
+
+  // Flower（在 Character panel 内）
+  renderFlower(id, 16);
+}
+
+// ---------------- 渲染图 ----------------
+function drawGraph(raw) {
+  // 重绘时保持 panel + 选择
+  const keepPanel = activePanel;
+  const keepNode = selectedNodeId;
+  const keepEdge = selectedEdgeKey;
+
+  // 规范化数据
+  const data = {
+    ...raw,
+    nodes: (raw?.nodes || []).map((d, i) => ({
+      ...d,
+      id: d.id || `node-${i}`,
+      value: Number(d.value ?? 0),
+    })),
+    links: (raw?.links || []).map((l) => ({
+      ...l,
+      source: normalizeId(l.source),
+      target: normalizeId(l.target),
+      value: Number(l.value ?? 0),
+    })),
+    contexts: raw?.contexts || {},
+    timeline: raw?.timeline || {},
+  };
+
   currentGraphData = data;
-  
-  // 清空 SVG
-  while (svg.firstChild) svg.removeChild(svg.firstChild);
 
-  const width = svg.clientWidth;
-  const height = svg.clientHeight;
+  // 清空外层 svg
+  while (svgOuter.firstChild) svgOuter.removeChild(svgOuter.firstChild);
 
-  // 节点半径、力参数
+  const width = svgOuter.clientWidth || graphWidth;
+  const height = svgOuter.clientHeight || graphHeight;
+
   const fg = ForceGraph(
-    { 
-      nodes: data.nodes.map((d, i) => ({
-        ...d,
-        id: d.id || `node-${i}`,
-        value: d.value ?? 0,
-      })), 
-      links: data.links 
-    },
+    { nodes: data.nodes, links: data.links },
     {
-      nodeId: d => d.id,
-      nodeTitle: d => `${d.id}\nCount: ${d.value}`,
-      nodeRadius: d => 3 + Math.log2((d.value ?? 0) + 1),
-      linkStrokeWidth: d => 0.3 + Math.sqrt(d.value) * 0.3,
+      nodeId: (d) => d.id,
+      nodeTitle: (d) => `${d.id}\nCount: ${d.value}`,
+      nodeRadius: (d) => 3 + Math.log2((d.value ?? 0) + 1),
+      linkStrokeWidth: (d) => 0.3 + Math.sqrt(d.value ?? 0) * 0.3,
       nodeStrength: -300,
       linkStrength: 0.05,
       width,
@@ -118,561 +266,815 @@ function drawGraph(data) {
     }
   );
 
-  // 保存图的全局引用
   graphInnerSvg = fg;
   graphWidth = width;
   graphHeight = height;
-  
-  // 收集所有节点
+
+  // 保存初始 viewBox（用于 reset）
+  fg.dataset.baseViewBox = fg.getAttribute("viewBox") || "";
+
+  // 挂到外层
+  svgOuter.appendChild(fg);
+
+  // 收集 nodes/links
   graphNodes = Array.from(fg.querySelectorAll("circle"));
+  graphLinks = Array.from(fg.querySelectorAll("line")).filter(
+    (l) => l.getAttribute("stroke") !== "transparent"
+  );
+
   nodeById.clear();
-  graphNodes.forEach(n => {
+  graphNodes.forEach((n) => {
     const d = n.__data__;
-    if (d && d.id) {
-      nodeById.set(d.id, n);
-    }
+    if (d && d.id) nodeById.set(d.id, n);
   });
 
-  // 点击节点显示人物详情（带邻居）并高亮 + 更新时间线
-  graphNodes.forEach(n => {
-    n.addEventListener("click", () => {
+  // label layer
+  labelLayer = fg.querySelector("g.__labels__");
+  if (!labelLayer) {
+    labelLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    labelLayer.setAttribute("class", "__labels__");
+    fg.appendChild(labelLayer);
+  }
+
+  // 点击节点 -> selectNode（不强制切 panel）
+  graphNodes.forEach((n) => {
+    n.addEventListener("click", (ev) => {
+      ev.stopPropagation();
       const d = n.__data__;
-      console.log("clicked node:", d);
-
-      // 🔹 使用“邻居表”版本的详情面板
-      showCharacterDetails(d.id, data);
-
-      // 🔹 用后端返回的 timeline 更新折线图（如果有）
-      const counts = (data.timeline && data.timeline[d.id]) || [];
-      const timelineData = counts.map((c, idx) => ({
-        chapter: idx + 1,
-        count: c,
-      }));
-      renderCharacterTimeline(timelineData);
-
-      // 🔹 高亮节点 & 相连边 & 居中视图（使用同学原来的函数）
-      highlightNodeAndConnections(d.id);
+      if (!d?.id) return;
+      selectNode(d.id);
+      setPanel(activePanel);
     });
   });
 
-  // 点击连线显示上下文片段
-  const visibleLinks = fg.querySelectorAll("line");
+  // 点击边 -> contexts
+  wireEdgeClick(fg, data);
 
-  visibleLinks.forEach(line => {
+  // All Characters 列表 -> selectNode
+  wireCharacterList(data);
+
+  // 默认选择
+  let pick = null;
+  if (keepNode && nodeById.has(keepNode)) pick = keepNode;
+  if (!pick && data.nodes.length) {
+    pick = [...data.nodes].sort((a, b) => (b.value ?? 0) - (a.value ?? 0))[0]?.id;
+  }
+  if (pick) selectNode(pick);
+
+  // 恢复 edge 状态文本
+  if (keepEdge && edgeStatusEl) edgeStatusEl.textContent = `Editing: ${keepEdge}`;
+
+  // 恢复 active panel
+  setPanel(keepPanel);
+}
+
+function wireEdgeClick(fg, data) {
+  const visibleLinks = Array.from(fg.querySelectorAll("line")).filter(
+    (l) => l.getAttribute("stroke") !== "transparent"
+  );
+
+  visibleLinks.forEach((line) => {
     const d = line.__data__;
+    if (!d) return;
 
-    // 1. 为每条线创建一个"透明粗线"作为点击区域
+    // 创建 hit area
     const hit = document.createElementNS("http://www.w3.org/2000/svg", "line");
-    hit.setAttribute("x1", line.getAttribute("x1"));
-    hit.setAttribute("y1", line.getAttribute("y1"));
-    hit.setAttribute("x2", line.getAttribute("x2"));
-    hit.setAttribute("y2", line.getAttribute("y2"));
+    hit.classList.add("__hit__");
     hit.setAttribute("stroke", "transparent");
     hit.setAttribute("stroke-width", 15);
     hit.style.cursor = "pointer";
-
     line.parentNode.insertBefore(hit, line.nextSibling);
 
-    // 2. 点击 hit 线时，展示上下文
-    hit.addEventListener("click", () => {
-      const key = [d.source.id, d.target.id].sort().join("|");
-      const ctx = data.contexts[key];
+    // hit 跟随真实线位置
+    const sync = () => {
+      hit.setAttribute("x1", line.getAttribute("x1"));
+      hit.setAttribute("y1", line.getAttribute("y1"));
+      hit.setAttribute("x2", line.getAttribute("x2"));
+      hit.setAttribute("y2", line.getAttribute("y2"));
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(line, { attributes: true });
 
+    hit.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+
+      const a = normalizeId(d.source);
+      const b = normalizeId(d.target);
+      const key = makeEdgeKey(a, b);
       selectedEdgeKey = key;
 
-      // 高亮当前连线
-      visibleLinks.forEach(l => {
+      // 高亮该边
+      visibleLinks.forEach((l) => {
         l.setAttribute("stroke", "#999");
-        l.setAttribute("stroke-opacity", "0.6");
+        l.setAttribute("stroke-opacity", "0.35");
         l.setAttribute("stroke-width", "1.5");
       });
       line.setAttribute("stroke", "#ff5733");
       line.setAttribute("stroke-opacity", "0.95");
       line.setAttribute("stroke-width", "3");
 
-      // 更新右侧文本编辑器和信息面板
-      if (!ctx || ctx.length === 0) {
+      // 切换到 contexts panel
+      setPanel("contexts");
+
+      // 载入 contexts
+      const ctxRaw = data.contexts?.[key];
+      const ctx = ensureArrayContexts(ctxRaw);
+
+      if (edgeStatusEl) edgeStatusEl.textContent = `Editing: ${key}`;
+
+      if (!ctx.length) {
         if (linkContextEditor) linkContextEditor.value = "";
-        if (edgeStatusEl) edgeStatusEl.textContent = `Selected: ${key}`;
-        infoEl.innerHTML = `
-          <p><b>${d.source.id}</b> & <b>${d.target.id}</b>: No context found.</p>
-          <button onclick="addContextManually('${d.source.id}', '${d.target.id}')">Add Context Manually</button>
-        `;
-      } else {
-        const textJoined = ctx.map(text => typeof text === 'string' ? text : text.text || '').join("\n\n");
-        if (linkContextEditor) linkContextEditor.value = textJoined;
-        if (edgeStatusEl) edgeStatusEl.textContent = `Editing: ${key}`;
-        
+        if (infoEl) {
+          infoEl.innerHTML = `
+            <p><b>${escapeHtml(a)}</b> & <b>${escapeHtml(b)}</b>: No context found.</p>
+            <button class="btn" onclick="addContextManually('${escapeHtml(a)}', '${escapeHtml(b)}')">Add Context Manually</button>
+          `;
+        }
+        return;
+      }
+
+      // 编辑器 textarea
+      if (linkContextEditor) {
+        linkContextEditor.value = ctx.map((x) => (x.text || "").trim()).join("\n\n");
+      }
+
+      // snippets 列表
+      if (infoEl) {
         const snippets = ctx
           .map((s, idx) => {
-            const text = typeof s === 'string' ? s : s.text || '';
+            const text = (s.text || "").trim();
             return `
-              <div style="margin-bottom: 1rem;">
-                <blockquote>${text.trim()}</blockquote>
-                <div style="margin-top: 0.5rem;">
-                  <button onclick="editContextWithData('${d.source.id}', '${d.target.id}', ${idx})">Edit</button>
-                  <button onclick="deleteContext('${d.source.id}', '${d.target.id}', ${idx})" style="margin-left: 0.5rem;">Delete</button>
-                </div>
+            <div style="margin-bottom: 1rem;">
+              <blockquote>${escapeHtml(text)}</blockquote>
+              <div style="margin-top: 0.5rem;display:flex;gap:8px;flex-wrap:wrap;">
+                <button class="btn" onclick="editContextWithData('${escapeHtml(a)}', '${escapeHtml(b)}', ${idx})">Edit</button>
+                <button class="btn" onclick="deleteContext('${escapeHtml(a)}', '${escapeHtml(b)}', ${idx})">Delete</button>
               </div>
-            `;
+            </div>
+          `;
           })
           .join("");
-        
+
         infoEl.innerHTML = `
-          <h3>📖 ${d.source.id} & ${d.target.id}</h3>
+          <h3 style="text-align:left;margin:0 0 8px;">📖 ${escapeHtml(a)} & ${escapeHtml(b)}</h3>
           ${snippets}
-          <button onclick="addContextManually('${d.source.id}', '${d.target.id}')" style="margin-top: 1rem;">Add More Context</button>
+          <button class="btn primary" onclick="addContextManually('${escapeHtml(a)}', '${escapeHtml(b)}')" style="margin-top: 10px;">Add More Context</button>
         `;
       }
     });
-
-    // 3. 让 hit 线跟着原线移动
-    const observer = new MutationObserver(() => {
-      hit.setAttribute("x1", line.getAttribute("x1"));
-      hit.setAttribute("y1", line.getAttribute("y1"));
-      hit.setAttribute("x2", line.getAttribute("x2"));
-      hit.setAttribute("y2", line.getAttribute("y2"));
-    });
-    observer.observe(line, { attributes: true });
   });
-
-  svg.appendChild(fg);
-
-  // ===== 人物列表 + 搜索 =====
-  const listEl = document.getElementById("charList");
-  const searchInput = document.getElementById("charSearch");
-
-  if (listEl) {
-    // 统一整理数据
-    const nodesWithValue = data.nodes.map((d, i) => ({
-      ...d,
-      id: d.id || `node-${i}`,
-      value: d.value ?? 0,
-    }));
-
-    // 渲染列表的函数 - 添加 data-id 属性
-    function renderCharList(list) {
-      listEl.innerHTML = list
-        .map(d => `<li data-id="${d.id}">${d.id} (${d.value})</li>`)
-        .join("");
-    }
-
-    // 先渲染完整列表
-    renderCharList(nodesWithValue);
-
-    // 点击列表中的人物，高亮图中节点 + 邻居 + timeline
-    listEl.onclick = (e) => {
-      const li = e.target.closest("li");
-      if (!li) return;
-
-      const name = li.getAttribute("data-id");
-      if (!name) return;
-
-      // 高亮节点和连接
-      highlightNodeAndConnections(name);
-      
-      // 使用邻居表版本的详情
-      showCharacterDetails(name, data);
-
-      // 更新时间线
-      const counts = (data.timeline && data.timeline[name]) || [];
-      const timelineData = counts.map((c, idx) => ({
-        chapter: idx + 1,
-        count: c,
-      }));
-      renderCharacterTimeline(timelineData);
-    };
-
-    // 搜索功能：输入时按名字过滤
-    if (searchInput) {
-      searchInput.oninput = () => {
-        const q = searchInput.value.trim().toLowerCase();
-        const filtered = q
-          ? nodesWithValue.filter(d => d.id.toLowerCase().includes(q))
-          : nodesWithValue;
-        renderCharList(filtered);
-      };
-    }
-  }
-
-  // ==== 邻居表版本的 Character Details（从你的代码搬过来） ====
-  function showCharacterDetails(centerId, dataForChar) {
-    if (!centerId || !dataForChar) return;
-
-    // 1. 找到中心角色本身
-    const centerNode = dataForChar.nodes.find(n => n.id === centerId);
-    const centerCount = centerNode ? (centerNode.value ?? 0) : 0;
-
-    // 2. 从所有边中找出与它相连的邻居
-    //    注意：source/target 可能是字符串，也可能已经被 d3/force 改成对象
-    const neighborMap = new Map(); // id -> { id, count, cooccurrence }
-
-    dataForChar.links.forEach(l => {
-      const srcId = typeof l.source === "string" ? l.source : l.source.id;
-      const tgtId = typeof l.target === "string" ? l.target : l.target.id;
-      const val = l.value ?? 0;
-
-      if (srcId === centerId || tgtId === centerId) {
-        const otherId = srcId === centerId ? tgtId : srcId;
-
-        // 邻居自身出现次数
-        const neighborNode = dataForChar.nodes.find(n => n.id === otherId);
-        const neighborCount = neighborNode ? (neighborNode.value ?? 0) : 0;
-
-        if (!neighborMap.has(otherId)) {
-          neighborMap.set(otherId, {
-            id: otherId,
-            count: neighborCount,
-            cooccurrence: 0,
-          });
-        }
-        const entry = neighborMap.get(otherId);
-        entry.cooccurrence += val;   // 多条边时累加共现次数
-      }
-    });
-
-    // 3. 排序：按与中心角色的共现次数从大到小
-    const neighbors = Array.from(neighborMap.values())
-      .sort((a, b) => b.cooccurrence - a.cooccurrence);
-
-    // 4. 生成 HTML
-    let html = `
-      <h3>🧍 ${centerId}</h3>
-      <p>Appears <b>${centerCount}</b> times in text.</p>
-    `;
-
-    if (neighbors.length === 0) {
-      html += `<p>No neighbor characters.</p>`;
-    } else {
-      html += `
-        <details class="neighbors-block" open>
-          <summary>Neighbors (${neighbors.length})</summary>
-          <div class="neighbors-table-wrapper">
-            <table class="neighbors-table">
-              <thead>
-                <tr>
-                  <th>Character</th>
-                  <th>Appearances</th>
-                  <th>Co-occurrences<br>with ${centerId}</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${
-                  neighbors.map(n => `
-                    <tr>
-                      <td>${n.id}</td>
-                      <td>${n.count}</td>
-                      <td>${n.cooccurrence}</td>
-                    </tr>
-                  `).join("")
-                }
-              </tbody>
-            </table>
-          </div>
-        </details>
-      `;
-    }
-
-    detailsEl.innerHTML = html;
-  }
 }
 
-// ---------------- 用 d3 渲染人物 timeline 折线图（从你的版本搬过来） ----------------
-// timelineData: [{ chapter: 1, count: 3 }, ...]
+// ---------------- 图强调：淡化无关 + 邻居颜色/大小 + labels ----------------
+function applyGraphEmphasis(centerId) {
+  if (!graphInnerSvg || !currentGraphData || !nodeById.has(centerId)) return;
+
+  const adj = computeAdjacencyFromLinks(currentGraphData);
+  const m = adj.get(centerId) || new Map();
+  const neighbors = Array.from(m.entries())
+    .map(([id, w]) => ({ id, w: Number(w) }))
+    .sort((a, b) => b.w - a.w);
+
+  const maxW = neighbors.length ? neighbors[0].w : 1;
+  const color = d3.scaleSequential(d3.interpolateYlOrRd).domain([0, maxW]);
+
+  // node 样式
+  graphNodes.forEach((n) => {
+    const d = n.__data__;
+    const id = d?.id;
+    const baseR = 3 + Math.log2((d?.value ?? 0) + 1);
+
+    // 默认淡化
+    n.setAttribute("opacity", "0.15");
+    n.setAttribute("stroke", "#fff");
+    n.setAttribute("stroke-width", "1.5");
+
+    // 默认色
+    const hue = (Math.log2((d?.value ?? 0) + 1) * 40) % 360;
+    n.setAttribute("fill", `hsl(${hue}, 70%, 65%)`);
+    n.setAttribute("r", baseR);
+
+    if (id === centerId) {
+      n.setAttribute("opacity", "1");
+      n.setAttribute("fill", "#ffcc00");
+      n.setAttribute("stroke", "#ff5733");
+      n.setAttribute("stroke-width", "3");
+      n.setAttribute("r", baseR * 1.25);
+      return;
+    }
+
+    const w = m.get(id);
+    if (w != null) {
+      const ww = Number(w);
+      const scale = Math.max(0, Math.min(1, ww / (maxW || 1)));
+      n.setAttribute("opacity", "0.95");
+      n.setAttribute("fill", color(ww));
+      n.setAttribute("r", baseR * (1.0 + 0.35 * scale));
+    }
+  });
+
+  // link 样式
+  const allLines = Array.from(graphInnerSvg.querySelectorAll("line")).filter(
+    (l) => l.getAttribute("stroke") !== "transparent"
+  );
+  allLines.forEach((line) => {
+    const d = line.__data__;
+    const a = normalizeId(d?.source);
+    const b = normalizeId(d?.target);
+    const w = Number(d?.value ?? 0);
+
+    // 默认淡化
+    line.setAttribute("opacity", "0.12");
+    line.setAttribute("stroke", "#999");
+    line.setAttribute("stroke-opacity", "0.35");
+    line.setAttribute("stroke-width", "1.2");
+
+    // 与中心相连的边
+    if (a === centerId || b === centerId) {
+      line.setAttribute("opacity", "1");
+      line.setAttribute("stroke", color(w));
+      line.setAttribute("stroke-opacity", "0.95");
+      line.setAttribute("stroke-width", String(1.5 + Math.sqrt(w) * 1.0));
+    }
+  });
+
+  // 邻居节点 label：显示共现数（前 20）
+  renderNeighborLabels(centerId, neighbors.slice(0, 20));
+}
+
+function renderNeighborLabels(centerId, neighborArr) {
+  if (!labelLayer) return;
+
+  // 清空
+  while (labelLayer.firstChild) labelLayer.removeChild(labelLayer.firstChild);
+  labelItems = [];
+
+  // 中心 label
+  const centerCircle = nodeById.get(centerId);
+  if (centerCircle?.__data__) {
+    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t.textContent = centerId;
+    t.setAttribute("font-size", "12");
+    t.setAttribute("font-weight", "800");
+    t.setAttribute("fill", "rgba(232,238,255,.95)");
+    t.setAttribute("paint-order", "stroke");
+    t.setAttribute("stroke", "rgba(0,0,0,.45)");
+    t.setAttribute("stroke-width", "3");
+    labelLayer.appendChild(t);
+    labelItems.push({ textEl: t, nodeDataRef: centerCircle.__data__, dx: 10, dy: -10 });
+  }
+
+  neighborArr.forEach(({ id, w }) => {
+    const circle = nodeById.get(id);
+    if (!circle?.__data__) return;
+
+    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t.textContent = String(w);
+    t.setAttribute("font-size", "11");
+    t.setAttribute("font-weight", "900");
+    t.setAttribute("fill", "rgba(232,238,255,.95)");
+    t.setAttribute("paint-order", "stroke");
+    t.setAttribute("stroke", "rgba(0,0,0,.45)");
+    t.setAttribute("stroke-width", "3");
+    labelLayer.appendChild(t);
+
+    labelItems.push({ textEl: t, nodeDataRef: circle.__data__, dx: 10, dy: 4 });
+  });
+
+  startLabelLoop();
+}
+
+function startLabelLoop() {
+  if (rafLabelLoop != null) cancelAnimationFrame(rafLabelLoop);
+
+  const tick = () => {
+    labelItems.forEach((it) => {
+      const d = it.nodeDataRef;
+      if (!d) return;
+      const x = Number(d.x ?? 0) + (it.dx ?? 0);
+      const y = Number(d.y ?? 0) + (it.dy ?? 0);
+      it.textEl.setAttribute("x", String(x));
+      it.textEl.setAttribute("y", String(y));
+    });
+    rafLabelLoop = requestAnimationFrame(tick);
+  };
+
+  rafLabelLoop = requestAnimationFrame(tick);
+}
+
+// ---------------- Character 详情（邻居表 + 点击选中） ----------------
+function showCharacterDetails(centerId) {
+  if (!detailsEl || !currentGraphData) return;
+
+  const data = currentGraphData;
+
+  const centerNode = data.nodes.find((n) => n.id === centerId);
+  const centerCount = centerNode ? centerNode.value ?? 0 : 0;
+
+  const neighborMap = new Map(); // id -> {id, count, cooccurrence}
+
+  data.links.forEach((l) => {
+    const a = normalizeId(l.source);
+    const b = normalizeId(l.target);
+    const w = Number(l.value ?? 0);
+
+    if (a === centerId || b === centerId) {
+      const other = a === centerId ? b : a;
+      const neighborNode = data.nodes.find((n) => n.id === other);
+      const neighborCount = neighborNode ? neighborNode.value ?? 0 : 0;
+
+      if (!neighborMap.has(other)) {
+        neighborMap.set(other, { id: other, count: neighborCount, cooccurrence: 0 });
+      }
+      neighborMap.get(other).cooccurrence += w;
+    }
+  });
+
+  const neighbors = Array.from(neighborMap.values()).sort(
+    (x, y) => y.cooccurrence - x.cooccurrence
+  );
+
+  // 确保 flower 容器存在
+  const flowerHostId = "__flower_host__";
+  let flowerHost = detailsEl.querySelector(`#${flowerHostId}`);
+  if (!flowerHost) {
+    flowerHost = document.createElement("div");
+    flowerHost.id = flowerHostId;
+  }
+
+  let html = `
+    <h3 style="text-align:left;margin:0 0 6px;">🧍 ${escapeHtml(centerId)}</h3>
+    <p style="margin:0 0 10px;color:rgba(232,238,255,.85);">Appears <b>${centerCount}</b> times in text.</p>
+    <div id="${flowerHostId}" style="margin:8px 0 12px;"></div>
+  `;
+
+  if (!neighbors.length) {
+    html += `<p style="opacity:.8;">No neighbor characters.</p>`;
+  } else {
+    html += `
+      <details class="neighbors-block" open>
+        <summary>Neighbors (${neighbors.length})</summary>
+        <div class="neighbors-table-wrapper">
+          <table class="neighbors-table">
+            <thead>
+              <tr>
+                <th>Character</th>
+                <th>Appearances</th>
+                <th>Co-occurrences</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${neighbors
+                .map(
+                  (n) => `
+                <tr class="__neighbor_row__" data-id="${escapeHtml(n.id)}" style="cursor:pointer;">
+                  <td>${escapeHtml(n.id)}</td>
+                  <td>${n.count}</td>
+                  <td>${n.cooccurrence}</td>
+                </tr>
+              `
+                )
+                .join("")}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    `;
+  }
+
+  detailsEl.innerHTML = html;
+
+  // 点击邻居行 -> selectNode
+  detailsEl.querySelectorAll(".__neighbor_row__").forEach((row) => {
+    row.addEventListener("click", () => {
+      const id = row.getAttribute("data-id");
+      if (!id) return;
+      selectNode(id);
+      setPanel(activePanel);
+    });
+  });
+
+  // flower 渲染
+  renderFlower(centerId, 16);
+}
+
+// ---------------- Timeline ----------------
 function renderCharacterTimeline(timelineData) {
   const svgEl = document.getElementById("timeline-svg");
   if (!svgEl) return;
 
   const svg = d3.select(svgEl);
-
-  // 清空旧图
   svg.selectAll("*").remove();
 
   const width = svgEl.clientWidth || 400;
   const height = svgEl.clientHeight || 180;
-
-  // 设置 viewBox，自适应
   svg.attr("viewBox", `0 0 ${width} ${height}`);
 
-  // 没数据 或 所有章节出现次数都为 0
-  if (!timelineData || timelineData.length === 0 ||
-      d3.max(timelineData, d => d.count) === 0) {
-    svg.append("text")
-      .attr("x", 10)
-      .attr("y", 20)
-      .attr("font-size", 12)
-      .text("No timeline data.");
+  if (!timelineData || !timelineData.length || d3.max(timelineData, (d) => d.count) === 0) {
+    svg.append("text").attr("x", 10).attr("y", 20).attr("font-size", 12).text("No timeline data.");
     return;
   }
 
-  const margin = { top: 20, right: 20, bottom: 30, left: 45 };
-  const innerWidth = width - margin.left - margin.right;
-  const innerHeight = height - margin.top - margin.bottom;
+  const margin = { top: 20, right: 18, bottom: 30, left: 45 };
+  const innerW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
 
-  const maxChapter = d3.max(timelineData, d => d.chapter);
-  const maxCount = d3.max(timelineData, d => d.count);
+  const maxChapter = d3.max(timelineData, (d) => d.chapter);
+  const maxCount = d3.max(timelineData, (d) => d.count);
 
-  // X 轴：章节
-  const x = d3.scaleLinear()
-    .domain([1, maxChapter])
-    .range([0, innerWidth]);
+  const x = d3.scaleLinear().domain([1, maxChapter]).range([0, innerW]);
+  const y = d3.scaleLinear().domain([0, maxCount]).nice().range([innerH, 0]);
 
-  // Y 轴：出现次数
-  const y = d3.scaleLinear()
-    .domain([0, maxCount])
-    .nice()
-    .range([innerHeight, 0]);
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
-  const g = svg.append("g")
-    .attr("transform", `translate(${margin.left},${margin.top})`);
-
-  // X 轴（最多 20 个刻度，避免全挤在一起）
-  const tickCount = Math.min(20, maxChapter);
   g.append("g")
-    .attr("transform", `translate(0,${innerHeight})`)
-    .call(
-      d3.axisBottom(x)
-        .ticks(tickCount)
-        .tickFormat(d3.format("d"))
-    );
+    .attr("transform", `translate(0,${innerH})`)
+    .call(d3.axisBottom(x).ticks(Math.min(20, maxChapter)).tickFormat(d3.format("d")));
 
-  // Y 轴
-  g.append("g")
-    .call(d3.axisLeft(y).ticks(4));
+  g.append("g").call(d3.axisLeft(y).ticks(4));
 
-  // Y 轴标签
-  g.append("text")
-    .attr("x", 0)
-    .attr("y", -8)
-    .attr("font-size", 11)
-    .text("Occurrences per chapter");
+  const line = d3.line().x((d) => x(d.chapter)).y((d) => y(d.count));
 
-  // X 轴标签
-  g.append("text")
-    .attr("x", innerWidth / 2)
-    .attr("y", innerHeight + 25)
-    .attr("font-size", 11)
-    .attr("text-anchor", "middle")
-    .text("Chapters");
-
-  // 折线生成器
-  const line = d3.line()
-    .x(d => x(d.chapter))
-    .y(d => y(d.count));
-
-  // 画折线
   g.append("path")
     .datum(timelineData)
     .attr("fill", "none")
-    .attr("stroke", "steelblue")
-    .attr("stroke-width", 2)
+    .attr("stroke", "rgba(110,168,255,.95)")
+    .attr("stroke-width", 2.2)
     .attr("d", line);
 
-  // 圆点 + 原生 tooltip
-  const dots = g.selectAll("circle")
+  const dots = g
+    .selectAll("circle")
     .data(timelineData)
     .enter()
     .append("circle")
-    .attr("cx", d => x(d.chapter))
-    .attr("cy", d => y(d.count))
+    .attr("cx", (d) => x(d.chapter))
+    .attr("cy", (d) => y(d.count))
     .attr("r", 3)
-    .attr("fill", "steelblue");
+    .attr("fill", "rgba(255,204,0,.95)");
 
-  // 浏览器自带 tooltip：悬停显示“第 N 章：出现 X 次”
-  dots.append("title")
-    .text(d => `Chapter ${d.chapter}: ${d.count} time(s)`);
+  dots.append("title").text((d) => `Chapter ${d.chapter}: ${d.count} time(s)`);
 }
 
-// ---------------- 高亮节点和连接的函数（保留你同学的版本） ----------------
-function highlightNodeAndConnections(nodeName) {
-  if (!graphInnerSvg || !nodeById.has(nodeName)) return;
+// ---------------- Flower（D3 径向花瓣） ----------------
+function renderFlower(centerId, topK = 16) {
+  const host = detailsEl?.querySelector("#__flower_host__");
+  if (!host || !currentGraphData || !centerId) return;
 
-  // 重置所有节点样式
-  graphNodes.forEach(n => {
-    const d = n.__data__;
-    const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
-    n.setAttribute("r", baseR);
-    n.setAttribute("stroke", "#fff");
-    n.setAttribute("stroke-width", "1.5");
-    n.setAttribute("fill", "black");
-  });
+  host.innerHTML = "";
 
-  // 重置所有连线样式
-  const allLinks = graphInnerSvg.querySelectorAll("line");
-  allLinks.forEach(l => {
-    l.setAttribute("stroke", "#999");
-    l.setAttribute("stroke-opacity", "0.6");
-    l.setAttribute("stroke-width", "1.5");
-  });
+  const svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svgEl.id = "flower-svg";
+  svgEl.setAttribute("height", "240");
+  svgEl.style.width = "100%";
+  host.appendChild(svgEl);
 
-  // 高亮目标节点
-  const targetNode = nodeById.get(nodeName);
-  if (targetNode) {
-    const d = targetNode.__data__;
-    const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
-    targetNode.setAttribute("r", baseR * 1.5);
-    targetNode.setAttribute("stroke", "#ff5733");
-    targetNode.setAttribute("stroke-width", "3");
-    targetNode.setAttribute("fill", "#ffcc00");
+  const svg = d3.select(svgEl);
+  svg.selectAll("*").remove();
 
-    // 高亮相连的连线
-    allLinks.forEach(line => {
-      const linkData = line.__data__;
-      if (linkData.source.id === nodeName || linkData.target.id === nodeName) {
-        line.setAttribute("stroke", "#ff5733");
-        line.setAttribute("stroke-opacity", "0.95");
-        line.setAttribute("stroke-width", "3");
-      }
+  const width = svgEl.clientWidth || 420;
+  const height = 240;
+  svg.attr("viewBox", `0 0 ${width} ${height}`);
+
+  const cx = width / 2;
+  const cy = height / 2 + 6;
+
+  const adj = computeAdjacencyFromLinks(currentGraphData);
+  const m = adj.get(centerId) || new Map();
+
+  let neighbors = Array.from(m.entries())
+    .map(([id, w]) => ({ id, w: Number(w) }))
+    .sort((a, b) => b.w - a.w)
+    .slice(0, topK);
+
+  if (!neighbors.length) {
+    svg.append("text").attr("x", 10).attr("y", 20).attr("font-size", 12).text("No relationship data for flower.");
+    return;
+  }
+
+  const maxW = d3.max(neighbors, (d) => d.w) || 1;
+  const color = d3.scaleSequential(d3.interpolateYlOrRd).domain([0, maxW]);
+  const r0 = 26;
+  const rMax = Math.min(width, height) * 0.42;
+
+  const rScale = d3.scaleSqrt().domain([0, maxW]).range([r0 + 18, rMax]);
+
+  const g = svg.append("g").attr("transform", `translate(${cx},${cy})`);
+
+  // 中心圆
+  g.append("circle")
+    .attr("r", r0)
+    .attr("fill", "rgba(255,255,255,.08)")
+    .attr("stroke", "rgba(255,255,255,.18)")
+    .attr("stroke-width", 1.2);
+
+  g.append("text")
+    .attr("text-anchor", "middle")
+    .attr("dy", "0.35em")
+    .attr("font-weight", 900)
+    .attr("font-size", 12)
+    .attr("fill", "rgba(232,238,255,.95)")
+    .text(centerId.length > 18 ? centerId.slice(0, 18) + "…" : centerId);
+
+  // 花瓣
+  const n = neighbors.length;
+  const pad = Math.min(0.06, ((Math.PI * 2) / n) * 0.18);
+  const arc = d3.arc();
+
+  const petals = g
+    .selectAll("path")
+    .data(neighbors)
+    .enter()
+    .append("path")
+    .attr("d", (d, i) => {
+      const a0 = (i / n) * Math.PI * 2;
+      const a1 = ((i + 1) / n) * Math.PI * 2;
+      return arc({
+        innerRadius: r0 + 6,
+        outerRadius: rScale(d.w),
+        startAngle: a0 + pad,
+        endAngle: a1 - pad,
+      });
+    })
+    .attr("fill", (d) => color(d.w))
+    .attr("opacity", 0.95)
+    .style("cursor", "pointer")
+    .on("mouseenter", (event, d) => {
+      applyGraphEmphasis(centerId);
+      emphasizeSingleNeighbor(centerId, d.id);
+    })
+    .on("mouseleave", () => {
+      applyGraphEmphasis(centerId);
+    })
+    .on("click", (event, d) => {
+      selectNode(d.id);
+      setPanel(activePanel);
     });
 
-    // 居中显示
-    if (d.x && d.y) {
-      const zoom = 2.0;
-      const vbWidth = graphWidth / zoom;
-      const vbHeight = graphHeight / zoom;
-      const centerX = d.x - vbWidth / 2;
-      const centerY = d.y - vbHeight / 2;
-      graphInnerSvg.setAttribute("viewBox", `${centerX} ${centerY} ${vbWidth} ${vbHeight}`);
+  petals.append("title").text((d) => `${centerId} ↔ ${d.id}: ${d.w}`);
+
+  // 花瓣标签
+  g.selectAll("text.__petal_label__")
+    .data(neighbors)
+    .enter()
+    .append("text")
+    .attr("class", "__petal_label__")
+    .attr("font-size", 10)
+    .attr("font-weight", 800)
+    .attr("fill", "rgba(232,238,255,.92)")
+    .attr("text-anchor", "middle")
+    .attr("transform", (d, i) => {
+      const mid = ((i + 0.5) / n) * Math.PI * 2;
+      const rr = rScale(d.w) + 10;
+      const x = Math.cos(mid - Math.PI / 2) * rr;
+      const y = Math.sin(mid - Math.PI / 2) * rr;
+      const rot = (mid * 180) / Math.PI - 90;
+      return `translate(${x},${y}) rotate(${rot})`;
+    })
+    .text((d) => (d.id.length > 12 ? d.id.slice(0, 12) + "…" : d.id));
+}
+
+// ---------------- 强高亮单个邻居边 ----------------
+function emphasizeSingleNeighbor(centerId, neighborId) {
+  if (!graphInnerSvg) return;
+
+  const key = makeEdgeKey(centerId, neighborId);
+
+  const allLines = Array.from(graphInnerSvg.querySelectorAll("line")).filter(
+    (l) => l.getAttribute("stroke") !== "transparent"
+  );
+  allLines.forEach((line) => {
+    const d = line.__data__;
+    const a = normalizeId(d?.source);
+    const b = normalizeId(d?.target);
+    const k = makeEdgeKey(a, b);
+
+    if (k === key) {
+      line.setAttribute("stroke", "#ff5733");
+      line.setAttribute("stroke-opacity", "0.98");
+      line.setAttribute("stroke-width", "4");
+      line.setAttribute("opacity", "1");
     }
+  });
+
+  const c = nodeById.get(neighborId);
+  if (c) {
+    c.setAttribute("stroke", "#ff5733");
+    c.setAttribute("stroke-width", "3");
+    c.setAttribute("opacity", "1");
   }
 }
 
-// ---------------- 重置视图函数 ----------------
+// ---------------- All Characters 列表（panel） ----------------
+function wireCharacterList(data) {
+  const listEl = document.getElementById("charList");
+  const searchInput = document.getElementById("charSearch");
+  const sortMode = document.getElementById("sortMode");
+  if (!listEl) return;
+
+  const nodesWithValue = (data.nodes || []).map((d, i) => ({
+    ...d,
+    id: d.id || `node-${i}`,
+    value: Number(d.value ?? 0),
+  }));
+
+  function surnameKey(name) {
+    const parts = String(name).trim().split(/\s+/);
+    return (parts.length >= 2 ? parts[parts.length - 1] : parts[0]).toLowerCase();
+  }
+
+  function sortList(list) {
+    const mode = sortMode ? sortMode.value : "freq";
+    if (mode === "name") {
+      return [...list].sort((a, b) => surnameKey(a.id).localeCompare(surnameKey(b.id)));
+    }
+    return [...list].sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+  }
+
+  function renderCharList(list) {
+    const sorted = sortList(list);
+    listEl.innerHTML = sorted
+      .map((d) => `<li data-id="${escapeHtml(d.id)}">${escapeHtml(d.id)} (${d.value})</li>`)
+      .join("");
+  }
+
+  function applyFilterAndRender() {
+    const q = (searchInput?.value || "").trim().toLowerCase();
+    const filtered = q ? nodesWithValue.filter((d) => d.id.toLowerCase().includes(q)) : nodesWithValue;
+    renderCharList(filtered);
+  }
+
+  applyFilterAndRender();
+
+  listEl.onclick = (e) => {
+    const li = e.target.closest("li");
+    if (!li) return;
+    const name = li.getAttribute("data-id");
+    if (!name) return;
+    selectNode(name);
+    setPanel(activePanel);
+  };
+
+  if (searchInput) searchInput.oninput = applyFilterAndRender;
+  if (sortMode) sortMode.onchange = applyFilterAndRender;
+}
+
+// ---------------- Reset view ----------------
 function resetGraphView() {
   if (!graphInnerSvg) return;
-  
-  // 重置视图框
-  graphInnerSvg.setAttribute("viewBox", `${-graphWidth/2} ${-graphHeight/2} ${graphWidth} ${graphHeight}`);
-  
-  // 重置所有节点样式
-  graphNodes.forEach(n => {
+
+  // 恢复 base viewBox
+  const vb = graphInnerSvg.dataset.baseViewBox;
+  if (vb) graphInnerSvg.setAttribute("viewBox", vb);
+
+  selectedNodeId = null;
+  selectedEdgeKey = null;
+
+  // 清理边高亮 + 节点淡化
+  graphNodes.forEach((n) => {
     const d = n.__data__;
-    const baseR = 3 + Math.log2(((d?.value) ?? 0) + 1);
+    const baseR = 3 + Math.log2((d?.value ?? 0) + 1);
+    n.setAttribute("opacity", "1");
     n.setAttribute("r", baseR);
     n.setAttribute("stroke", "#fff");
     n.setAttribute("stroke-width", "1.5");
-    n.setAttribute("fill", "black");
+
+    const hue = (Math.log2((d?.value ?? 0) + 1) * 40) % 360;
+    n.setAttribute("fill", `hsl(${hue}, 70%, 65%)`);
   });
 
-  // 重置所有连线样式
-  const allLinks = graphInnerSvg.querySelectorAll("line");
-  allLinks.forEach(l => {
+  const allLines = Array.from(graphInnerSvg.querySelectorAll("line")).filter(
+    (l) => l.getAttribute("stroke") !== "transparent"
+  );
+  allLines.forEach((l) => {
+    l.setAttribute("opacity", "1");
     l.setAttribute("stroke", "#999");
     l.setAttribute("stroke-opacity", "0.6");
     l.setAttribute("stroke-width", "1.5");
   });
-}
 
-// ---------------- 绑定reset按钮 ----------------
-if (resetViewBtn) {
-  resetViewBtn.addEventListener("click", resetGraphView);
-}
+  // 清空 labels
+  if (labelLayer) {
+    while (labelLayer.firstChild) labelLayer.removeChild(labelLayer.firstChild);
+  }
+  labelItems = [];
+  if (rafLabelLoop != null) {
+    cancelAnimationFrame(rafLabelLoop);
+    rafLabelLoop = null;
+  }
 
-// ---------------- 保存上下文功能 ----------------
+  // 重置 contexts 状态
+  if (edgeStatusEl) edgeStatusEl.textContent = "No edge selected";
+
+  // 默认 panel
+  setPanel("timeline");
+}
+if (resetViewBtn) resetViewBtn.addEventListener("click", resetGraphView);
+
+// ---------------- Save context ----------------
 if (saveContextBtn && linkContextEditor) {
   saveContextBtn.addEventListener("click", () => {
     if (!selectedEdgeKey) {
       alert("Please click an edge first to select it.");
       return;
     }
-    
     if (!currentGraphData) {
       alert("No graph data loaded.");
       return;
     }
-    
+
     const rawText = linkContextEditor.value || "";
-    const items = rawText.split(/\n{2,}/).map(s => s.trim()).filter(s => s.length > 0);
-    
+    const items = rawText
+      .split(/\n{2,}/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
     if (!currentGraphData.contexts) currentGraphData.contexts = {};
-    currentGraphData.contexts[selectedEdgeKey] = items.map(text => ({ text, chapters: [] }));
-    
+    currentGraphData.contexts[selectedEdgeKey] = items.map((text) => ({ text, chapters: [] }));
+
+    // 保存后保持状态
+    const keepPanel = activePanel;
+    const keepNode = selectedNodeId;
+
     drawGraph(currentGraphData);
-    
+
     if (edgeStatusEl) edgeStatusEl.textContent = `Saved contexts for ${selectedEdgeKey}`;
+    setPanel("contexts");
+    if (keepNode) selectNode(keepNode);
+
+    // 保持用户 panel（这里强制回 contexts）
+    activePanel = keepPanel;
+    setPanel("contexts");
+
     alert("Context saved successfully!");
   });
 }
 
-// ---------------- 上下文管理函数 ----------------
-function makeEdgeKey(a, b) {
-  return [a, b].sort().join("|");
-}
-
-function normalizeContextEntry(entry) {
-  if (!entry) return { text: "", chapters: [] };
-  if (typeof entry === "string") return { text: entry, chapters: [] };
-  return {
-    text: typeof entry.text === "string" ? entry.text : entry.toString(),
-    chapters: Array.isArray(entry.chapters) ? entry.chapters : []
-  };
-}
-
-window.deleteContext = function(a, b, i) {
+// ---------------- Context 管理（window API） ----------------
+window.deleteContext = function (a, b, i) {
+  if (!currentGraphData) return;
   const key = makeEdgeKey(a, b);
-  const old = normalizeContextEntry(currentGraphData.contexts[key][i]);
-  currentGraphData.contexts[key].splice(i, 1);
-  
-  // 如果删除后这个边没有context了，就删除这条边
-  if (currentGraphData.contexts[key].length === 0) {
+  const arr = ensureArrayContexts(currentGraphData.contexts?.[key]);
+
+  if (!arr[i]) return;
+  arr.splice(i, 1);
+
+  if (!currentGraphData.contexts) currentGraphData.contexts = {};
+  if (arr.length === 0) {
     delete currentGraphData.contexts[key];
-    
-    // 找到对应的link并删除
-    const linkIndex = currentGraphData.links.findIndex(link => {
-      const src = typeof link.source === 'object' ? link.source.id : link.source;
-      const tgt = typeof link.target === 'object' ? link.target.id : link.target;
-      return makeEdgeKey(src, tgt) === key;
-    });
-    
-    if (linkIndex > -1) {
-      currentGraphData.links.splice(linkIndex, 1);
-    }
-    
-    // 检查并删除孤立的节点（更保守的判断）
-    [a, b].forEach(character => {
-      // 检查节点是否还有其他连接
-      const hasOtherLinks = currentGraphData.links.some(link => {
-        const src = typeof link.source === 'object' ? link.source.id : link.source;
-        const tgt = typeof link.target === 'object' ? link.target.id : link.target;
-        return src === character || tgt === character;
-      });
-      
-      // 找到节点数据
-      const node = currentGraphData.nodes.find(n => n.id === character);
-      
-      // 只有当节点满足以下所有条件时才删除：
-      // 1. 没有其他连接
-      // 2. 这个节点很可能是通过手动添加上下文创建的
-      //    - 没有明确的value值（undefined）
-      //    - 或者value为0（可能是手动添加的）
-      // 我们保守一点，尽量不删除节点
-      if (!hasOtherLinks && node && (node.value === undefined || node.value === 0)) {
-        const nodeIndex = currentGraphData.nodes.findIndex(n => n.id === character);
-        if (nodeIndex > -1) {
-          currentGraphData.nodes.splice(nodeIndex, 1);
-          console.log(`Deleted isolated node: ${character}`);
-        }
-      } else if (!hasOtherLinks && node) {
-        console.log(`Keeping node ${character} because it has value: ${node.value}`);
-      }
-    });
+
+    // 同步删除 link（可选）
+    const idx = (currentGraphData.links || []).findIndex(
+      (l) => makeEdgeKey(normalizeId(l.source), normalizeId(l.target)) === key
+    );
+    if (idx > -1) currentGraphData.links.splice(idx, 1);
+  } else {
+    currentGraphData.contexts[key] = arr.map((x) => ({ text: x.text, chapters: x.chapters || [] }));
   }
-  
+
   drawGraph(currentGraphData);
+  setPanel("contexts");
 };
 
-window.addContextManually = function(a, b) {
+window.addContextManually = function (a, b) {
+  if (!currentGraphData) return;
   const txt = prompt(`Context for ${a}&${b}:`);
   if (!txt) return;
+
   const canonical = txt.trim();
   const key = makeEdgeKey(a, b);
-  currentGraphData.contexts[key] = currentGraphData.contexts[key] || [];
-  currentGraphData.contexts[key].push({text: canonical, chapters: []});
-  currentGraphData.nodes.find(n => n.id === a) || currentGraphData.nodes.push({id: a, value: 0});
-  currentGraphData.nodes.find(n => n.id === b) || currentGraphData.nodes.push({id: b, value: 0});
-  currentGraphData.links.find(l => makeEdgeKey(
-    typeof l.source === "object" ? l.source.id : l.source,
-    typeof l.target === "object" ? l.target.id : l.target
-  ) === key) || currentGraphData.links.push({source: a, target: b, value: 1});
+
+  currentGraphData.contexts = currentGraphData.contexts || {};
+  currentGraphData.contexts[key] = ensureArrayContexts(currentGraphData.contexts[key]);
+  currentGraphData.contexts[key].push({ text: canonical, chapters: [] });
+
+  // 确保节点存在
+  if (!currentGraphData.nodes.find((n) => n.id === a)) currentGraphData.nodes.push({ id: a, value: 0 });
+  if (!currentGraphData.nodes.find((n) => n.id === b)) currentGraphData.nodes.push({ id: b, value: 0 });
+
+  // 确保边存在
+  const exists = currentGraphData.links.some(
+    (l) => makeEdgeKey(normalizeId(l.source), normalizeId(l.target)) === key
+  );
+  if (!exists) currentGraphData.links.push({ source: a, target: b, value: 1 });
+
   drawGraph(currentGraphData);
+  setPanel("contexts");
+};
+
+window.editContextWithData = function (a, b, idx) {
+  if (!currentGraphData) return;
+  const key = makeEdgeKey(a, b);
+  const arr = ensureArrayContexts(currentGraphData.contexts?.[key]);
+  if (!arr[idx]) return;
+
+  const old = arr[idx].text || "";
+  const txt = prompt(`Edit context for ${a}&${b}:`, old);
+  if (txt == null) return;
+
+  arr[idx] = { text: txt.trim(), chapters: [] };
+  currentGraphData.contexts[key] = arr;
+
+  drawGraph(currentGraphData);
+  setPanel("contexts");
 };

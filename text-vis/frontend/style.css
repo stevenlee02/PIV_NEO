@@ -1,6 +1,20 @@
+:root{
+  --bg: #fafafa;
+  --panel: #ffffff;
+  --border: #d9d9d9;
+  --text: #1f1f1f;
+  --muted: #6b6b6b;
+  --accent: #ff5733;
+  --accent2: #4CAF50;
+  --shadow: 0 8px 24px rgba(0,0,0,0.08);
+  --radius: 14px;
+}
+
 body {
   margin: 0;
-  font-family: Arial, sans-serif;
+  font-family: Arial, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
   display: flex;
   height: 100vh;
 }
@@ -17,11 +31,37 @@ body {
   background: white;
 }
 
-svg {
-  width: 100%;
-  height: 100%;
+/* ===================== Layout ===================== */
+#left{
+  flex: 3;
+  padding: 1rem;
+  box-sizing: border-box;
 }
 
+#right{
+  flex: 2;
+  min-width: 350px;
+  max-width: 520px;
+  border-left: 1px solid var(--border);
+  padding: 1rem;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  box-sizing: border-box;
+}
+
+/* ===================== Graph ===================== */
+svg#graph {
+  width: 100%;
+  height: 80vh;
+  border: 1px solid var(--border);
+  background: radial-gradient(1200px 700px at 30% 10%, #1b2b5b, #0b1224 60%, #070a12);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* d3 force nodes/links */
 .node {
   stroke: #fff;
   stroke-width: 1.5px;
@@ -32,72 +72,198 @@ svg {
   stroke-opacity: 0.6;
 }
 
-#info {
-  margin-top: 10px;
-  font-size: 0.9em;
-  color: #333;
+/* ===================== Buttons / inputs ===================== */
+button{
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  padding: 0.45rem 0.8rem;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
 }
 
-/* ==== Timeline Panel ==== */
-#timeline-panel {
-  margin-top: 0.5rem;
+button:hover{
+  border-color: #c3c3c3;
+}
+
+#uploadBtn, #articleAnalyzeBtn, #saveContextBtn{
+  background: var(--accent2);
+  border-color: transparent;
+  color: #fff;
+}
+
+#uploadBtn:hover, #articleAnalyzeBtn:hover, #saveContextBtn:hover{
+  filter: brightness(0.95);
+}
+
+input[type="file"]{
+  margin-right: 8px;
+}
+
+input, select, textarea{
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.45rem 0.6rem;
+  box-sizing: border-box;
+  outline: none;
+}
+
+input:focus, select:focus, textarea:focus{
+  border-color: rgba(255,87,51,0.6);
+  box-shadow: 0 0 0 3px rgba(255,87,51,0.12);
+}
+
+/* ===================== Panels ===================== */
+#details{
   margin-bottom: 1rem;
-  border: 1px solid #ccc;
-  padding: 0.5rem;
-  background: #fafafa;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding-right: 8px;
+  box-sizing: border-box;
 }
 
-/* ==== 搜索区域 ==== */
-#search-bar {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
+#info{
+  border: 1px solid var(--border);
+  background: var(--panel);
+  margin: 1rem auto;
+  width: 80%;
+  padding: 1rem;
+  max-height: 300px;
+  overflow-y: auto;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  white-space: pre-wrap;
+}
+
+.panel-title{
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.muted{ color: var(--muted); }
+.small{ font-size: 12px; }
+
+/* ===================== Context blocks ===================== */
+.ctx-block{
+  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.ctx-summary{
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+
+.ctx-summary::-webkit-details-marker{
+  display:none;
+}
+
+.ctx-body blockquote{
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-left: 4px solid var(--accent);
+  background: #fff7f5;
+  border-radius: 10px;
+}
+
+/* ===================== Editor ===================== */
+#context-editor{
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+#linkContextEditor{
+  width: 100%;
+  height: 150px;
   margin-bottom: 0.5rem;
-}
-
-#search-bar #charSearch {
-  flex: 1;
-}
-
-#sortMode,
-#resetViewBtn {
-  padding: 0.3rem 0.4rem;
+  padding: 0.6rem;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 0.9rem;
 }
 
-/* ==== 文本输入分析区域（你同学的） ==== */
-#article-section {
-  margin-top: 2rem;
-  padding: 1rem;
-  background-color: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+#edge-status{
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin-top: 0.5rem;
 }
 
-#articleInput {
-  width: 100%;
-  padding: 0.5rem;
-  font-size: 1rem;
-  margin-bottom: 1rem;
-  border: 1px solid #ccc;
-  border-radius: 5px;
+/* ===================== Right-side charts ===================== */
+#timeline-panel, #heatmap-panel, #freq-panel{
+  margin-bottom: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem;
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.05);
 }
 
-#articleAnalyzeBtn {
-  padding: 0.5rem 1rem;
-  font-size: 1rem;
-  background-color: #4CAF50;
-  color: white;
-  border: none;
-  border-radius: 5px;
+#timeline-panel h3,
+#heatmap-panel h3,
+#freq-panel h3{
+  margin: 6px 0 8px;
+  font-size: 14px;
+}
+
+/* ===================== All Characters collapsible ===================== */
+#allchars{
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem;
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+}
+
+#allchars > summary{
   cursor: pointer;
+  font-weight: 800;
+  list-style: none;
 }
 
-#articleAnalyzeBtn:hover {
-  background-color: #45a049;
+#allchars > summary::-webkit-details-marker{
+  display:none;
 }
 
-/* ==== Neighbor Table Style（你的邻居表样式） ==== */
+#search-bar{
+  margin: 10px 0 8px;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+#charSearch{
+  flex: 1;
+}
+
+/* Character list */
+#charList{
+  margin: 0;
+  padding-left: 1.2rem;
+  max-height: 32vh;
+  overflow-y: auto;
+}
+
+#charList li{
+  cursor: pointer;
+  padding: 6px 6px;
+  border-radius: 10px;
+}
+
+#charList li:hover{
+  background: rgba(255,87,51,0.08);
+}
+
+/* Neighbor table */
 .neighbors-table {
   width: 100%;
   border-collapse: collapse;
@@ -107,46 +273,91 @@ svg {
 
 .neighbors-table th,
 .neighbors-table td {
-  border: 1px solid #ddd;
-  padding: 4px 8px;
+  border: 1px solid #eee;
+  padding: 6px 10px;
 }
 
 .neighbors-table th {
-  background: #f5f5f5;
+  background: #f7f7f7;
   text-align: left;
 }
 
-/* 外层 details，下拉块 */
-.neighbors-block {
-  margin-top: 0.5rem;
-}
-
-/* summary 行：可以点、稍微粗一点 */
 .neighbors-block summary {
   cursor: pointer;
   font-weight: bold;
   list-style: none;
 }
 
-/* 防止 summary 前面出现小三角的默认样式 */
 .neighbors-block summary::-webkit-details-marker {
   display: none;
 }
 
-/* 包住表格，限制高度 + 出滚动条，防止邻居太多撑爆右侧面板 */
 .neighbors-table-wrapper {
   max-height: 260px;
   overflow-y: auto;
   overflow-x: auto;
 }
-/* 防止 summary 前面出现小三角的默认样式（有些浏览器会有） */
-.neighbors-block summary::-webkit-details-marker {
-  display: none;
+
+.clickable-row{
+  cursor: pointer;
 }
 
-/* 包住表格，限制高度 + 出滚动条，防止邻居太多撑爆右侧面板 */
-.neighbors-table-wrapper {
-  max-height: 260px;      /* 你可以根据右侧面板高度调，比如 250～300 都可以 */
-  overflow-y: auto;
-  overflow-x: auto;       /* 有需要时水平也滚动，不会溢出 */
+.clickable-row:hover{
+  background: rgba(255,87,51,0.06);
+}
+
+/* ===================== Text input analysis (folded by default, h2 style preserved) ===================== */
+#articleFold{
+  margin: 10px 0 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+/* summary：不改字体，只去掉默认 marker + 做成块级可点 */
+#articleSummary{
+  cursor: pointer;
+  list-style: none;
+  display: block;
+  padding: 0;
+  margin: 0;
+}
+
+/* 去掉三角（Chrome/Safari/Edge + Firefox） */
+#articleSummary::-webkit-details-marker{ display:none; }
+#articleSummary::marker{ content:""; }
+
+/* 确保 summary 内的 h2 完全按全局 h2 来 */
+#articleSummary h2{
+  margin: 0.2rem 0 0.8rem;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* 内容区：不要卡片嵌套样式 */
+#article-section{
+  margin-top: 10px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+#article-section textarea{
+  width: 100%;
+  box-sizing: border-box;
+  height: 140px;
+  min-height: 140px;
+  max-height: 180px;
+  resize: vertical;
+}
+
+/* Headings */
+h2{
+  margin: 0.2rem 0 0.8rem;
+  text-align: center;
+  font-size: 18px;
 }
