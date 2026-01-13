@@ -219,18 +219,138 @@ def compute_timeline(chapters, variant_to_canon):
     return timeline
 
 
+# ================== 以下为我新增的最小增量辅助函数 ==================
+# 新增目的：
+# 1) Timeline 交互(4)：点击某章时，需要后端能提供章节的 title/snippet（chapter card）
+# 2) Timeline 交互(4)：点击某章时，需要能展示该角色在该章出现的“证据句”（mentions）
+# 3) Context 交互(3)：edge context 需要带 chapters: [n]，前端才能显示 Chapter chips 跳转
+
+
+def build_chapters_meta(chapters):
+    """
+    为每一章生成 metadata（给前端 Timeline 的 chapter card 用）
+    统一使用阿拉伯数字作为章节编号（CHAPTER 1, CHAPTER 2, ...）
+    snippet 使用该章节的第一段正文
+    """
+    meta = []
+
+    for i, ch in enumerate(chapters, start=1):
+        raw = (ch or "").strip()
+
+        # 去掉标题行，只保留正文
+        lines = raw.splitlines()
+        body = "\n".join(lines[1:]).strip() if len(lines) > 1 else raw
+
+        # 按空行切段，取第一段
+        paras = [p.strip() for p in re.split(r"\n\s*\n+", body) if p.strip()]
+        first_para = paras[0] if paras else ""
+
+        snippet = re.sub(r"\s+", " ", first_para)
+
+        meta.append({
+            "index": i,
+            "title": f"CHAPTER {i}",   # 永远是阿拉伯数字
+            "snippet": snippet
+        })
+
+    return meta
+
+def build_mentions(chapters, variant_to_canon, limit_per_chapter=None):
+    """
+    新增：为 Timeline 交互(4)生成“证据句”
+    要求：显示该角色出现的“所有句子证据”
+    做法：默认 limit_per_chapter=None 表示不限制；每章收集该角色出现的全部句子
+
+    返回结构（JSON 的 key 需要字符串，所以章号用 str）：
+    {
+      "Elizabeth Bennet": {"1": ["sent1", "sent2", ...], "2": [...], ...},
+      ...
+    }
+
+    参数：
+    - limit_per_chapter: None 不限制；传 int 可限制每章最多多少条（当前需求：不限制）
+    """
+    mentions = defaultdict(lambda: defaultdict(list))
+
+    for ci, chapter_text in enumerate(chapters, start=1):
+        sents = split_text_by_sentence(chapter_text)
+
+        for sent in sents:
+            raw_persons = extract_persons(sent)
+            canon_set = set()
+
+            for p in raw_persons:
+                p_clean = clean_name(p)
+                if not p_clean:
+                    continue
+                canon = variant_to_canon.get(p_clean)
+                if canon:
+                    canon_set.add(canon)
+
+            if not canon_set:
+                continue
+
+            for canon in canon_set:
+                if limit_per_chapter is None:
+                    mentions[canon][str(ci)].append(sent)
+                else:
+                    if len(mentions[canon][str(ci)]) < int(limit_per_chapter):
+                        mentions[canon][str(ci)].append(sent)
+
+        # 新增：每章内去重（同一句可能因处理差异产生重复）
+        for canon in list(mentions.keys()):
+            key = str(ci)
+            if key in mentions[canon]:
+                seen = set()
+                uniq = []
+                for s in mentions[canon][key]:
+                    s_norm = re.sub(r"\s+", " ", s).strip()
+                    if s_norm and s_norm not in seen:
+                        seen.add(s_norm)
+                        uniq.append(s_norm)
+                mentions[canon][key] = uniq
+
+    return mentions
+
+def build_sentence_chapter_index(chapters):
+    """
+    新增：把章节拆成句子，并记录每句属于哪一章（1-based）
+    用途：让 build_cooccurrence_network 里的 contexts 记录 chapters:[n]（交互(3)）
+    返回：
+      sentences_all, sent_persons_all, chapter_ids
+    """
+    all_sents = []
+    all_persons = []
+    chapter_ids = []
+
+    for ci, chapter_text in enumerate(chapters, start=1):
+        sents = split_text_by_sentence(chapter_text)
+        for sent in sents:
+            raw_persons = extract_persons(sent)
+            persons = []
+            for p in raw_persons:
+                p_clean = clean_name(p)
+                if p_clean:
+                    persons.append(p_clean)
+            all_sents.append(sent)
+            all_persons.append(persons)
+            chapter_ids.append(ci)
+
+    return all_sents, all_persons, chapter_ids
+
+
 # ---------------- 共用文本分析函数 ----------------
 def process_text(text: str):
     text = clean_illustrations(text)
     skip_words = SKIP_WORDS
-    
+
     print("🔹 Splitting sentences and extracting names...")
     sentences = split_text_by_sentence(text)
     all_names, sent_persons = [], []
-    sent_persons = []  
+    sent_persons = []
 
     for sent in sentences:
-        raw_persons = extract_persons(sent)  
+        raw_persons = extract_persons(sent)
         persons = []
         for p in raw_persons:
             p_clean = clean_name(p)
@@ -242,12 +362,11 @@ def process_text(text: str):
         else:
             sent_persons.append([])
 
-
     unique_names = sorted(set(all_names))[:200]
     print(f"Extracted {len(unique_names)} candidate names.")
     # 检测是否为短文本
     is_short_text = len(text) < 20000  # 小于2万字符算短文本
-    
+
     # 修改prompt，对短文本添加更严格的要求
     if is_short_text:
         prompt = f"""
@@ -261,8 +380,8 @@ They may include:
 Here is the extracted list (max 200 entries):
 {json.dumps(unique_names, ensure_ascii=False)}
 
-CRITICAL FOR SHORT STORIES: 
-- Be VERY CONSERVATIVE when merging names. 
+CRITICAL FOR SHORT STORIES:
+- Be VERY CONSERVATIVE when merging names.
 - Only merge names if you are ABSOLUTELY certain they refer to the same character.
 - In short stories, different characters often have distinct names without many variants.
 - DO NOT merge names like "Della" and "James" - they are clearly different characters.
@@ -281,8 +400,7 @@ Rules:
 - No markdown, no explanations, no comments, no backticks.
 - Be conservative - better to have separate entries than incorrect merges.
 """
-
-    else: 
+    else:
         prompt = f"""
 You are an expert in literary text analysis.
 
@@ -331,13 +449,10 @@ Rules:
         else:
             # Fallback: try to extract from resp.output or resp.get("output", ...)
             try:
-                # resp.output is often a list of dicts with 'content' items
                 if isinstance(resp.output, list):
                     parts = []
                     for item in resp.output:
-                        # try a few likely keys
                         if isinstance(item, dict):
-                            # some SDKs: item["content"][0]["text"]
                             content = item.get("content") or item.get("text")
                             if isinstance(content, list):
                                 for c in content:
@@ -386,28 +501,28 @@ Rules:
                 v_clean = clean_name(v)
                 if v_clean and not any(k in v_clean.lower() for k in skip_words):
                     variant_to_canon[v_clean] = canon_clean
-    
-    # 只从现有的名字中提取部分匹配 不创建新名字 
+
+    # 只从现有的名字中提取部分匹配 不创建新名字
     def enhance_mapping(variant_to_canon, all_extracted_names):
         enhanced_mapping = variant_to_canon.copy()
         canonicals = list(set(enhanced_mapping.values()))
         all_names_set = set(all_extracted_names)  # 所有实际提取到的名字
-    
+
         # 为每个已存在的名字变体 检查其部分是否也在提取的名字列表中
         for existing_variant in list(enhanced_mapping.keys()):
             parts = existing_variant.split()
             if len(parts) <= 1:
                 continue
-            
+
             # 检查每个部分是否独立存在于提取的名字中
             for part in parts:
                 if (len(part) > 2 and  # 避免太短的匹配
-                    part in all_names_set and  
+                    part in all_names_set and
                     part not in enhanced_mapping and
                     not any(k in part.lower() for k in skip_words)):
                     # 将这个部分映射到同一个 canonical
                     enhanced_mapping[part] = enhanced_mapping[existing_variant]
-    
+
         return enhanced_mapping
 
     variant_to_canon = enhance_mapping(variant_to_canon, unique_names)
@@ -428,7 +543,7 @@ Rules:
         # 如果名字已经在映射中就跳过
         if n_clean in variant_to_canon:
             continue
-        
+
         # 检查是否应该映射到现有的 canonical
         matched = False
         for canon in set(variant_to_canon.values()):
@@ -438,16 +553,20 @@ Rules:
                 variant_to_canon[n_clean] = canon
                 matched = True
                 break
-    
+
         # 如果没有匹配到任何现有的 做identity映射
         if not matched and not any(k in n_clean.lower() for k in skip_words):
             variant_to_canon[n_clean] = n_clean
 
-    
+
     # ---------------- 用 canonical 名称构建共现网络 ----------------
-    def build_cooccurrence_network(sentences, sent_persons, variant_to_canon):
+    def build_cooccurrence_network(sentences, sent_persons, variant_to_canon, sentence_chapters=None):
         G = nx.Graph()
         cooccurrence_texts = defaultdict(list)
+
+        # ✅ 新增：如果没有提供 sentence -> chapter 映射，则全部当作第1章（保持向后兼容）
+        if sentence_chapters is None:
+            sentence_chapters = [1] * len(sentences)
 
         # 根据句子数量动态调整阈值
         total_sentences = len(sentences)
@@ -458,16 +577,16 @@ Rules:
         else:  # 长文本
             min_count_threshold = 5  # 原始阈值
 
-        for sent, persons in zip(sentences, sent_persons):
+        for sent, persons, ch_idx in zip(sentences, sent_persons, sentence_chapters):
             # 计算文本长度，动态调整上下文大小
             text_length = len(' '.join(sentences))
             is_long_text = text_length > 50000  # 50K字符以上算长文本
             # 动态设置上下文长度
             if is_long_text:
-            # 长文本：可以保留较长上下文（400字符）
+                # 长文本：可以保留较长上下文（400字符）
                 context_length = 400
             else:
-            # 短文本：使用较短上下文，避免场景混合
+                # 短文本：使用较短上下文，避免场景混合
                 context_length = 200
 
             # 将句子中提取的每个名字替换成canonical 若没有canonical则跳过
@@ -490,6 +609,7 @@ Rules:
                     G.nodes[a]["count"] += 1
                 else:
                     G.add_node(a, count=1)
+
             # 增加边并保存上下文句子
             for i in range(len(canon_list)):
                 for j in range(i + 1, len(canon_list)):
@@ -498,20 +618,27 @@ Rules:
                         G[a][b]["weight"] += 1
                     else:
                         G.add_edge(a, b, weight=1)
+
                     # use sorted key so "A|B" and "B|A" map same
                     key = "|".join(sorted([a, b]))
-                    if len(cooccurrence_texts[key]) < 5:  # 限制上下文条数 
-                        cooccurrence_texts[key].append(sent[:200])
+
+                    # ✅ 新增：contexts 由 string 改为 {text, chapters:[n]}
+                    # 目的：前端 Contexts 面板可以显示 Chapter chips（交互(3)）
+                    if len(cooccurrence_texts[key]) < 5:  # 限制上下文条数
+                        cooccurrence_texts[key].append({
+                            "text": sent[:context_length],
+                            "chapters": [int(ch_idx)]
+                        })
+
         # 使用动态阈值过滤节点
         nodes_to_keep = [n for n in G.nodes if G.nodes[n].get("count", 0) >= min_count_threshold]
         print(f"Filter threshold: {min_count_threshold}, Nodes before filtering: {len(G.nodes)}, after: {len(nodes_to_keep)}")
-    
+
         # 创建子图
         G_filtered = G.subgraph(nodes_to_keep).copy()
-    
+
         all_nodes = list(G_filtered.nodes)
         node_set = set(all_nodes)
-
 
         # links：只保留两端都在node_set的边
         links = []
@@ -524,18 +651,26 @@ Rules:
         nodes = sorted(nodes, key=lambda x: x["value"], reverse=True)
 
         print(f"Final Network: {len(nodes)} nodes, {len(links)} edges.")
-   
+
+        # ✅ 原来这里算了 filtered_contexts 但没用到；我保留你同学原意：只返回过滤后的 contexts
         filtered_contexts = {}
         for key, contexts in cooccurrence_texts.items():
             chars = key.split("|")
             if len(chars) == 2 and chars[0] in node_set and chars[1] in node_set:
                 filtered_contexts[key] = contexts
 
-        return {"nodes": nodes, "links": links, "contexts": dict(cooccurrence_texts)}
-    
-    result = build_cooccurrence_network(sentences, sent_persons, variant_to_canon)
+        return {"nodes": nodes, "links": links, "contexts": filtered_contexts}
+
     # 在这里调用章节拆分函数
     chapters = split_into_chapters(text)
+    if not chapters:
+        chapters = [text]
+
+    # 新增：章节->句子索引（为了 contexts 里带章节号，交互(3)）
+    sentences2, sent_persons2, chapter_ids = build_sentence_chapter_index(chapters)
+
+    # 共现网络用“带章节号的句子”，从而 contexts 自动带 chapters:[n]
+    result = build_cooccurrence_network(sentences2, sent_persons2, variant_to_canon, chapter_ids)
 
     # 计算 timeline
     timeline = compute_timeline(chapters, variant_to_canon)
@@ -544,7 +679,14 @@ Rules:
     result["timeline"] = timeline
     result["chapter_count"] = len(chapters)
 
+    # 新增：给前端 Timeline chapter card 用（交互(4)）
+    result["chapters_meta"] = build_chapters_meta(chapters)
+
+    # 新增：给前端 Timeline chapter card 的“证据句”用（交互(4)）
+    result["mentions"] = build_mentions(chapters, variant_to_canon, limit_per_chapter=None)
+
     return result
+
 
 # ---------------- 主分析接口 ----------------
 @app.post("/analyze")

@@ -2,10 +2,13 @@ import { ForceGraph } from "./forceGraph.js";
 import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
 
 // ---------------- 全局状态 ----------------
-let currentGraphData = null; // {nodes, links, contexts, timeline, ...}
+let currentGraphData = null; // {nodes, links, contexts, timeline, chapters_meta, mentions...}
 let selectedEdgeKey = null; // "A|B"
 let selectedNodeId = null; // "A"
 let activePanel = "timeline"; // timeline | neighbors | contexts | allchars
+
+// ✅ timeline 新增状态
+let activeChapter = null; // number | null
 
 let graphInnerSvg = null; // ForceGraph 返回的 <svg>
 let graphNodes = []; // circles
@@ -43,6 +46,9 @@ const toggleBar = document.getElementById("panelToggles");
 const detailsEl = document.getElementById("details");
 const resetViewBtn = document.getElementById("resetViewBtn");
 
+// timeline 卡片容器
+const chapterCardEl = document.getElementById("chapterCard");
+
 // ---------------- 工具函数 ----------------
 function normalizeId(x) {
   if (!x) return "";
@@ -66,12 +72,10 @@ function ensureArrayContexts(entryArr) {
 
 function computeAdjacencyFromLinks(data) {
   const adj = new Map(); // id -> Map(neighbor -> weight)
-
   function ensure(id) {
     if (!adj.has(id)) adj.set(id, new Map());
     return adj.get(id);
   }
-
   (data?.links || []).forEach((l) => {
     const s = normalizeId(l.source);
     const t = normalizeId(l.target);
@@ -80,7 +84,6 @@ function computeAdjacencyFromLinks(data) {
     ensure(s).set(t, (ensure(s).get(t) || 0) + w);
     ensure(t).set(s, (ensure(t).get(s) || 0) + w);
   });
-
   return adj;
 }
 
@@ -104,22 +107,19 @@ function resizeSVG() {
 resizeSVG();
 window.addEventListener("resize", resizeSVG);
 
-// ---------------- setPanel（额外强制隐藏 contexts 的两块） ----------------
+// ---------------- setPanel ----------------
 function setPanel(panelId) {
   activePanel = panelId;
 
-  // toggle 按钮高亮
   toggleBar?.querySelectorAll("button[data-panel]").forEach((b) => {
     b.classList.toggle("active", b.getAttribute("data-panel") === panelId);
   });
 
-  // panel 显示/隐藏（只管 .panel）
   rightScroll?.querySelectorAll(".panel").forEach((p) => {
     const id = p.getAttribute("data-panel");
     p.classList.toggle("hidden", id !== panelId);
   });
 
-  // 强制：contexts 的两块在非 contexts 时一律隐藏（防止被错误留在别的面板里）
   const ctxEditorCard = document.getElementById("context-editor");
   const ctxInfoCard = document.getElementById("info");
   if (panelId !== "contexts") {
@@ -199,34 +199,122 @@ if (articleAnalyzeBtn && articleInput) {
   });
 }
 
-// ---------------- 核心：选中节点（更新 Timeline + Character + Flower + 图强调） ----------------
+// ---------------- timeline 卡片渲染（4） ----------------
+function renderChapterCard(chapter1Based) {
+  if (!chapterCardEl || !currentGraphData) return;
+
+  const meta = (currentGraphData.chapters_meta || []).find((x) => x.index === chapter1Based);
+  const title = meta?.title || `Chapter ${chapter1Based}`;
+  const snippet = meta?.snippet || "";
+
+  const canon = selectedNodeId;
+  const ev = currentGraphData.mentions?.[canon]?.[chapter1Based] || [];
+
+  chapterCardEl.innerHTML = `
+    <h3 style="margin:0 0 8px;">${escapeHtml(title)}</h3>
+    ${
+      snippet
+        ? `<p style="margin:0 0 10px;color:rgba(232,238,255,.85);">${escapeHtml(snippet)}…</p>`
+        : `<p style="margin:0 0 10px;color:rgba(232,238,255,.85);">Chapter ${chapter1Based}</p>`
+    }
+    ${
+      ev.length
+        ? `<div style="display:flex;flex-direction:column;gap:10px;">
+            ${ev
+              .map(
+                (s) => `<blockquote style="margin:0;padding:10px;border-left:3px solid rgba(255,204,0,.8);background:rgba(255,255,255,.06);">
+                  ${escapeHtml(s)}
+                </blockquote>`
+              )
+              .join("")}
+          </div>`
+        : `<p style="margin:0;opacity:.75;">No evidence sentences for this character in this chapter.</p>`
+    }
+  `;
+}
+
+// ---------------- timeline 章节高亮（1） ----------------
+function applyChapterEmphasis(chapterIdx1Based) {
+  if (!currentGraphData || !graphNodes || !graphInnerSvg) return;
+  const idx = chapterIdx1Based - 1;
+
+  const t = currentGraphData.timeline || {};
+  let maxC = 0;
+  (currentGraphData.nodes || []).forEach((n) => {
+    const arr = t[n.id] || [];
+    const c = Number(arr[idx] || 0);
+    if (c > maxC) maxC = c;
+  });
+  if (maxC <= 0) maxC = 1;
+
+  graphNodes.forEach((circle) => {
+    const d = circle.__data__;
+    const id = d?.id;
+    const baseR = 3 + Math.log2((d?.value ?? 0) + 1);
+
+    const arr = t[id] || [];
+    const c = Number(arr[idx] || 0);
+    const p = Math.min(1, c / maxC);
+
+    circle.setAttribute("opacity", c > 0 ? String(0.25 + 0.75 * p) : "0.08");
+    circle.setAttribute("r", String(baseR * (1 + 0.6 * p)));
+    circle.setAttribute("stroke", c > 0 ? "#ffcc00" : "#fff");
+    circle.setAttribute("stroke-width", c > 0 ? "2.2" : "1.2");
+  });
+
+  const lines = Array.from(graphInnerSvg.querySelectorAll("line")).filter(
+    (l) => l.getAttribute("stroke") !== "transparent"
+  );
+
+  lines.forEach((line) => {
+    const d = line.__data__;
+    const a = normalizeId(d?.source);
+    const b = normalizeId(d?.target);
+
+    const ca = Number((t[a] || [])[idx] || 0);
+    const cb = Number((t[b] || [])[idx] || 0);
+    const w = ca + cb;
+    const p = Math.min(1, w / (maxC * 2 || 1));
+
+    line.setAttribute("opacity", w > 0 ? String(0.15 + 0.85 * p) : "0.05");
+    line.setAttribute("stroke-opacity", w > 0 ? String(0.2 + 0.8 * p) : "0.15");
+    line.setAttribute("stroke-width", String(1.1 + 2.5 * p));
+  });
+}
+
+// ---------------- 核心：选中节点 ----------------
 function selectNode(id) {
   if (!currentGraphData || !id) return;
   selectedNodeId = id;
 
-  // 图强调（邻居大小/颜色 + 淡化无关 + labels）
+  // 默认强调模式：节点中心
   applyGraphEmphasis(id);
 
-  // Character panel
   showCharacterDetails(id);
 
-  // Timeline panel
   const counts = (currentGraphData.timeline && currentGraphData.timeline[id]) || [];
   const timelineData = counts.map((c, idx) => ({ chapter: idx + 1, count: c }));
   renderCharacterTimeline(timelineData);
 
-  // Flower（在 Character panel 内）
   renderFlower(id, 16);
+
+  // ✅ 如果当前处于章节模式：切角色后卡片要更新，并保持章节高亮
+  if (activeChapter != null) {
+    applyChapterEmphasis(activeChapter);
+    renderChapterCard(activeChapter);
+  } else {
+    // 没选章节时，卡片清空或显示默认
+    if (chapterCardEl) chapterCardEl.innerHTML = "";
+  }
 }
 
 // ---------------- 渲染图 ----------------
 function drawGraph(raw) {
-  // 重绘时保持 panel + 选择
   const keepPanel = activePanel;
   const keepNode = selectedNodeId;
   const keepEdge = selectedEdgeKey;
+  const keepChapter = activeChapter;
 
-  // 规范化数据
   const data = {
     ...raw,
     nodes: (raw?.nodes || []).map((d, i) => ({
@@ -242,11 +330,12 @@ function drawGraph(raw) {
     })),
     contexts: raw?.contexts || {},
     timeline: raw?.timeline || {},
+    chapters_meta: raw?.chapters_meta || [],
+    mentions: raw?.mentions || {},
   };
 
   currentGraphData = data;
 
-  // 清空外层 svg
   while (svgOuter.firstChild) svgOuter.removeChild(svgOuter.firstChild);
 
   const width = svgOuter.clientWidth || graphWidth;
@@ -270,10 +359,8 @@ function drawGraph(raw) {
   graphWidth = width;
   graphHeight = height;
 
-  // 保存初始 viewBox（用于 reset）
   fg.dataset.baseViewBox = fg.getAttribute("viewBox") || "";
-
-  // 挂到外层
+    // 挂到外层
   svgOuter.appendChild(fg);
 
   // 收集 nodes/links
@@ -288,7 +375,6 @@ function drawGraph(raw) {
     if (d && d.id) nodeById.set(d.id, n);
   });
 
-  // label layer
   labelLayer = fg.querySelector("g.__labels__");
   if (!labelLayer) {
     labelLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -296,7 +382,6 @@ function drawGraph(raw) {
     fg.appendChild(labelLayer);
   }
 
-  // 点击节点 -> selectNode（不强制切 panel）
   graphNodes.forEach((n) => {
     n.addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -307,13 +392,9 @@ function drawGraph(raw) {
     });
   });
 
-  // 点击边 -> contexts
   wireEdgeClick(fg, data);
-
-  // All Characters 列表 -> selectNode
   wireCharacterList(data);
 
-  // 默认选择
   let pick = null;
   if (keepNode && nodeById.has(keepNode)) pick = keepNode;
   if (!pick && data.nodes.length) {
@@ -321,11 +402,15 @@ function drawGraph(raw) {
   }
   if (pick) selectNode(pick);
 
-  // 恢复 edge 状态文本
   if (keepEdge && edgeStatusEl) edgeStatusEl.textContent = `Editing: ${keepEdge}`;
-
-  // 恢复 active panel
   setPanel(keepPanel);
+
+  // ✅ 恢复章节状态
+  activeChapter = keepChapter ?? null;
+  if (activeChapter != null) {
+    applyChapterEmphasis(activeChapter);
+    renderChapterCard(activeChapter);
+  }
 }
 
 function wireEdgeClick(fg, data) {
@@ -337,7 +422,6 @@ function wireEdgeClick(fg, data) {
     const d = line.__data__;
     if (!d) return;
 
-    // 创建 hit area
     const hit = document.createElementNS("http://www.w3.org/2000/svg", "line");
     hit.classList.add("__hit__");
     hit.setAttribute("stroke", "transparent");
@@ -345,7 +429,6 @@ function wireEdgeClick(fg, data) {
     hit.style.cursor = "pointer";
     line.parentNode.insertBefore(hit, line.nextSibling);
 
-    // hit 跟随真实线位置
     const sync = () => {
       hit.setAttribute("x1", line.getAttribute("x1"));
       hit.setAttribute("y1", line.getAttribute("y1"));
@@ -364,7 +447,6 @@ function wireEdgeClick(fg, data) {
       const key = makeEdgeKey(a, b);
       selectedEdgeKey = key;
 
-      // 高亮该边
       visibleLinks.forEach((l) => {
         l.setAttribute("stroke", "#999");
         l.setAttribute("stroke-opacity", "0.35");
@@ -374,10 +456,8 @@ function wireEdgeClick(fg, data) {
       line.setAttribute("stroke-opacity", "0.95");
       line.setAttribute("stroke-width", "3");
 
-      // 切换到 contexts panel
       setPanel("contexts");
 
-      // 载入 contexts
       const ctxRaw = data.contexts?.[key];
       const ctx = ensureArrayContexts(ctxRaw);
 
@@ -394,19 +474,28 @@ function wireEdgeClick(fg, data) {
         return;
       }
 
-      // 编辑器 textarea
       if (linkContextEditor) {
         linkContextEditor.value = ctx.map((x) => (x.text || "").trim()).join("\n\n");
       }
 
-      // snippets 列表
+      // ✅ 3: snippets 下方显示 chapter chips，点击跳到 timeline + 高亮章节 + 卡片
       if (infoEl) {
         const snippets = ctx
           .map((s, idx) => {
             const text = (s.text || "").trim();
+            const chips = (s.chapters || [])
+              .map(
+                (ch) =>
+                  `<button class="chip" onclick="openChapterFromContext(${Number(ch)})">Chapter ${Number(
+                    ch
+                  )}</button>`
+              )
+              .join("");
+
             return `
             <div style="margin-bottom: 1rem;">
               <blockquote>${escapeHtml(text)}</blockquote>
+              ${chips ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">${chips}</div>` : ""}
               <div style="margin-top: 0.5rem;display:flex;gap:8px;flex-wrap:wrap;">
                 <button class="btn" onclick="editContextWithData('${escapeHtml(a)}', '${escapeHtml(b)}', ${idx})">Edit</button>
                 <button class="btn" onclick="deleteContext('${escapeHtml(a)}', '${escapeHtml(b)}', ${idx})">Delete</button>
@@ -426,6 +515,23 @@ function wireEdgeClick(fg, data) {
   });
 }
 
+// ✅ chip 点击：跳到 timeline 章节（3）
+window.openChapterFromContext = function (ch) {
+  const c = Number(ch);
+  if (!c || !currentGraphData) return;
+  activeChapter = c;
+  setPanel("timeline");
+  applyChapterEmphasis(c);
+  renderChapterCard(c);
+
+  // timeline 仍显示当前角色的 timeline，如果没有选角色就不强行选
+  if (selectedNodeId) {
+    const counts = (currentGraphData.timeline && currentGraphData.timeline[selectedNodeId]) || [];
+    const timelineData = counts.map((x, idx) => ({ chapter: idx + 1, count: x }));
+    renderCharacterTimeline(timelineData);
+  }
+};
+
 // ---------------- 图强调：淡化无关 + 邻居颜色/大小 + labels ----------------
 function applyGraphEmphasis(centerId) {
   if (!graphInnerSvg || !currentGraphData || !nodeById.has(centerId)) return;
@@ -439,18 +545,15 @@ function applyGraphEmphasis(centerId) {
   const maxW = neighbors.length ? neighbors[0].w : 1;
   const color = d3.scaleSequential(d3.interpolateYlOrRd).domain([0, maxW]);
 
-  // node 样式
   graphNodes.forEach((n) => {
     const d = n.__data__;
     const id = d?.id;
     const baseR = 3 + Math.log2((d?.value ?? 0) + 1);
 
-    // 默认淡化
     n.setAttribute("opacity", "0.15");
     n.setAttribute("stroke", "#fff");
     n.setAttribute("stroke-width", "1.5");
 
-    // 默认色
     const hue = (Math.log2((d?.value ?? 0) + 1) * 40) % 360;
     n.setAttribute("fill", `hsl(${hue}, 70%, 65%)`);
     n.setAttribute("r", baseR);
@@ -474,7 +577,6 @@ function applyGraphEmphasis(centerId) {
     }
   });
 
-  // link 样式
   const allLines = Array.from(graphInnerSvg.querySelectorAll("line")).filter(
     (l) => l.getAttribute("stroke") !== "transparent"
   );
@@ -484,13 +586,11 @@ function applyGraphEmphasis(centerId) {
     const b = normalizeId(d?.target);
     const w = Number(d?.value ?? 0);
 
-    // 默认淡化
     line.setAttribute("opacity", "0.12");
     line.setAttribute("stroke", "#999");
     line.setAttribute("stroke-opacity", "0.35");
     line.setAttribute("stroke-width", "1.2");
 
-    // 与中心相连的边
     if (a === centerId || b === centerId) {
       line.setAttribute("opacity", "1");
       line.setAttribute("stroke", color(w));
@@ -499,18 +599,14 @@ function applyGraphEmphasis(centerId) {
     }
   });
 
-  // 邻居节点 label：显示共现数（前 20）
   renderNeighborLabels(centerId, neighbors.slice(0, 20));
 }
 
 function renderNeighborLabels(centerId, neighborArr) {
   if (!labelLayer) return;
-
-  // 清空
   while (labelLayer.firstChild) labelLayer.removeChild(labelLayer.firstChild);
   labelItems = [];
 
-  // 中心 label
   const centerCircle = nodeById.get(centerId);
   if (centerCircle?.__data__) {
     const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
@@ -572,7 +668,7 @@ function showCharacterDetails(centerId) {
   const centerNode = data.nodes.find((n) => n.id === centerId);
   const centerCount = centerNode ? centerNode.value ?? 0 : 0;
 
-  const neighborMap = new Map(); // id -> {id, count, cooccurrence}
+  const neighborMap = new Map();
 
   data.links.forEach((l) => {
     const a = normalizeId(l.source);
@@ -595,7 +691,6 @@ function showCharacterDetails(centerId) {
     (x, y) => y.cooccurrence - x.cooccurrence
   );
 
-  // 确保 flower 容器存在
   const flowerHostId = "__flower_host__";
   let flowerHost = detailsEl.querySelector(`#${flowerHostId}`);
   if (!flowerHost) {
@@ -645,17 +740,16 @@ function showCharacterDetails(centerId) {
 
   detailsEl.innerHTML = html;
 
-  // 点击邻居行 -> selectNode
   detailsEl.querySelectorAll(".__neighbor_row__").forEach((row) => {
     row.addEventListener("click", () => {
       const id = row.getAttribute("data-id");
       if (!id) return;
+      activeChapter = null; // 切人默认退出章节模式
       selectNode(id);
       setPanel(activePanel);
     });
   });
 
-  // flower 渲染
   renderFlower(centerId, 16);
 }
 
@@ -711,12 +805,20 @@ function renderCharacterTimeline(timelineData) {
     .attr("cx", (d) => x(d.chapter))
     .attr("cy", (d) => y(d.count))
     .attr("r", 3)
-    .attr("fill", "rgba(255,204,0,.95)");
+    .attr("fill", "rgba(255,204,0,.95)")
+    .style("cursor", "pointer");
 
   dots.append("title").text((d) => `Chapter ${d.chapter}: ${d.count} time(s)`);
+
+  // ✅ 1 + 4：点击 dot -> 章节高亮 + 章节卡片
+  dots.on("click", (event, d) => {
+    activeChapter = d.chapter;
+    applyChapterEmphasis(d.chapter);
+    renderChapterCard(d.chapter);
+  });
 }
 
-// ---------------- Flower（D3 径向花瓣） ----------------
+// ---------------- Flower ----------------
 function renderFlower(centerId, topK = 16) {
   const host = detailsEl?.querySelector("#__flower_host__");
   if (!host || !currentGraphData || !centerId) return;
@@ -761,7 +863,6 @@ function renderFlower(centerId, topK = 16) {
 
   const g = svg.append("g").attr("transform", `translate(${cx},${cy})`);
 
-  // 中心圆
   g.append("circle")
     .attr("r", r0)
     .attr("fill", "rgba(255,255,255,.08)")
@@ -776,7 +877,6 @@ function renderFlower(centerId, topK = 16) {
     .attr("fill", "rgba(232,238,255,.95)")
     .text(centerId.length > 18 ? centerId.slice(0, 18) + "…" : centerId);
 
-  // 花瓣
   const n = neighbors.length;
   const pad = Math.min(0.06, ((Math.PI * 2) / n) * 0.18);
   const arc = d3.arc();
@@ -800,6 +900,7 @@ function renderFlower(centerId, topK = 16) {
     .attr("opacity", 0.95)
     .style("cursor", "pointer")
     .on("mouseenter", (event, d) => {
+      activeChapter = null;
       applyGraphEmphasis(centerId);
       emphasizeSingleNeighbor(centerId, d.id);
     })
@@ -807,13 +908,13 @@ function renderFlower(centerId, topK = 16) {
       applyGraphEmphasis(centerId);
     })
     .on("click", (event, d) => {
+      activeChapter = null;
       selectNode(d.id);
       setPanel(activePanel);
     });
 
   petals.append("title").text((d) => `${centerId} ↔ ${d.id}: ${d.w}`);
 
-  // 花瓣标签
   g.selectAll("text.__petal_label__")
     .data(neighbors)
     .enter()
@@ -911,6 +1012,7 @@ function wireCharacterList(data) {
     if (!li) return;
     const name = li.getAttribute("data-id");
     if (!name) return;
+    activeChapter = null;
     selectNode(name);
     setPanel(activePanel);
   };
@@ -923,14 +1025,13 @@ function wireCharacterList(data) {
 function resetGraphView() {
   if (!graphInnerSvg) return;
 
-  // 恢复 base viewBox
   const vb = graphInnerSvg.dataset.baseViewBox;
   if (vb) graphInnerSvg.setAttribute("viewBox", vb);
 
   selectedNodeId = null;
   selectedEdgeKey = null;
+  activeChapter = null;
 
-  // 清理边高亮 + 节点淡化
   graphNodes.forEach((n) => {
     const d = n.__data__;
     const baseR = 3 + Math.log2((d?.value ?? 0) + 1);
@@ -953,7 +1054,6 @@ function resetGraphView() {
     l.setAttribute("stroke-width", "1.5");
   });
 
-  // 清空 labels
   if (labelLayer) {
     while (labelLayer.firstChild) labelLayer.removeChild(labelLayer.firstChild);
   }
@@ -963,10 +1063,9 @@ function resetGraphView() {
     rafLabelLoop = null;
   }
 
-  // 重置 contexts 状态
   if (edgeStatusEl) edgeStatusEl.textContent = "No edge selected";
+  if (chapterCardEl) chapterCardEl.innerHTML = "";
 
-  // 默认 panel
   setPanel("timeline");
 }
 if (resetViewBtn) resetViewBtn.addEventListener("click", resetGraphView);
@@ -992,9 +1091,9 @@ if (saveContextBtn && linkContextEditor) {
     if (!currentGraphData.contexts) currentGraphData.contexts = {};
     currentGraphData.contexts[selectedEdgeKey] = items.map((text) => ({ text, chapters: [] }));
 
-    // 保存后保持状态
     const keepPanel = activePanel;
     const keepNode = selectedNodeId;
+    const keepChapter = activeChapter;
 
     drawGraph(currentGraphData);
 
@@ -1002,7 +1101,12 @@ if (saveContextBtn && linkContextEditor) {
     setPanel("contexts");
     if (keepNode) selectNode(keepNode);
 
-    // 保持用户 panel（这里强制回 contexts）
+    activeChapter = keepChapter ?? null;
+    if (activeChapter != null) {
+      applyChapterEmphasis(activeChapter);
+      renderChapterCard(activeChapter);
+    }
+
     activePanel = keepPanel;
     setPanel("contexts");
 
@@ -1010,7 +1114,7 @@ if (saveContextBtn && linkContextEditor) {
   });
 }
 
-// ---------------- Context 管理（window API） ----------------
+// ---------------- Context 管理（window API，保留） ----------------
 window.deleteContext = function (a, b, i) {
   if (!currentGraphData) return;
   const key = makeEdgeKey(a, b);
@@ -1023,7 +1127,6 @@ window.deleteContext = function (a, b, i) {
   if (arr.length === 0) {
     delete currentGraphData.contexts[key];
 
-    // 同步删除 link（可选）
     const idx = (currentGraphData.links || []).findIndex(
       (l) => makeEdgeKey(normalizeId(l.source), normalizeId(l.target)) === key
     );
@@ -1048,11 +1151,9 @@ window.addContextManually = function (a, b) {
   currentGraphData.contexts[key] = ensureArrayContexts(currentGraphData.contexts[key]);
   currentGraphData.contexts[key].push({ text: canonical, chapters: [] });
 
-  // 确保节点存在
   if (!currentGraphData.nodes.find((n) => n.id === a)) currentGraphData.nodes.push({ id: a, value: 0 });
   if (!currentGraphData.nodes.find((n) => n.id === b)) currentGraphData.nodes.push({ id: b, value: 0 });
 
-  // 确保边存在
   const exists = currentGraphData.links.some(
     (l) => makeEdgeKey(normalizeId(l.source), normalizeId(l.target)) === key
   );
