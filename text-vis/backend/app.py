@@ -338,6 +338,28 @@ def build_sentence_chapter_index(chapters):
 
     return all_sents, all_persons, chapter_ids
 
+def build_variants_map(variant_to_canon):
+    """
+    ✅ 新增：返回 canonical -> [variants...]，给前端做高亮用
+    结构：
+    {
+      "Elizabeth Bennet": ["Elizabeth Bennet", "Elizabeth", "Lizzy", ...],
+      ...
+    }
+    """
+    canon_to_variants = defaultdict(set)
+    for variant, canon in (variant_to_canon or {}).items():
+        if not canon or not variant:
+            continue
+        canon_to_variants[canon].add(canon)
+        canon_to_variants[canon].add(variant)
+
+    # 输出为 list，并按长度降序（前端 regex 更稳：先匹配长名字）
+    out = {}
+    for canon, vs in canon_to_variants.items():
+        out[canon] = sorted(list(vs), key=lambda x: len(x), reverse=True)
+    return out
+
 
 # ---------------- 共用文本分析函数 ----------------
 def process_text(text: str):
@@ -684,6 +706,9 @@ Rules:
 
     # 新增：给前端 Timeline chapter card 的“证据句”用（交互(4)）
     result["mentions"] = build_mentions(chapters, variant_to_canon, limit_per_chapter=None)
+
+    # ✅ 新增：给前端高亮人名用（canonical -> variants）
+    result["variants"] = build_variants_map(variant_to_canon)
 
     return result
 

@@ -2,7 +2,7 @@ import { ForceGraph } from "./forceGraph.js";
 import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
 
 // ---------------- 全局状态 ----------------
-let currentGraphData = null; // {nodes, links, contexts, timeline, chapters_meta, mentions...}
+let currentGraphData = null; // {nodes, links, contexts, timeline, chapters_meta, mentions, variants...}
 let selectedEdgeKey = null; // "A|B"
 let selectedNodeId = null; // "A"
 let activePanel = "timeline"; // timeline | neighbors | contexts | allchars
@@ -141,6 +141,47 @@ function escapeHtml(str) {
     .replaceAll("'", "&#39;");
 }
 
+function escapeRegex(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * ✅ 高亮：对指定 canonical 的所有 variants 做 <mark class="name-hl">
+ * - 先 escapeHtml，保证安全
+ * - 再用正则在 escaped 文本中替换（不会注入）
+ * - 英文：用 \b 边界；多词名字：空格变 \s+ 允许多个空白
+ */
+function highlightByCanon(text, canon) {
+  const raw = String(text ?? "");
+  const safe = escapeHtml(raw);
+
+  if (!canon || !currentGraphData?.variants) return safe;
+
+  const variants = currentGraphData.variants?.[canon];
+  if (!Array.isArray(variants) || variants.length === 0) return safe;
+
+  // 长名字优先（你后端已排序；这里再保险）
+  const names = [...variants].filter(Boolean).sort((a, b) => String(b).length - String(a).length);
+  if (!names.length) return safe;
+
+  const pattern = names
+    .map((n) => escapeRegex(String(n)).replace(/\\\s+/g, "\\s+"))
+    .join("|");
+
+  if (!pattern) return safe;
+
+  const re = new RegExp(`\\b(?:${pattern})\\b`, "gi");
+  return safe.replace(re, (m) => `<mark class="name-hl">${m}</mark>`);
+}
+
+/**
+ * ✅ 高亮：对当前 selectedNodeId 执行
+ */
+function highlightSelected(text) {
+  if (!selectedNodeId) return escapeHtml(String(text ?? ""));
+  return highlightByCanon(text, selectedNodeId);
+}
+
 // ---------------- 外层 svg 尺寸自适应 ----------------
 function resizeSVG() {
   if (!svgOuter) return;
@@ -259,7 +300,9 @@ function renderChapterCard(chapter1Based) {
     <h3 style="margin:0 0 8px;">${escapeHtml(title)}</h3>
     ${
       snippet
-        ? `<p style="margin:0 0 10px;color:rgba(232,238,255,.85);">${escapeHtml(snippet)}…</p>`
+        ? `<p style="margin:0 0 10px;color:rgba(232,238,255,.85);">${highlightSelected(
+            snippet
+          )}…</p>`
         : `<p style="margin:0 0 10px;color:rgba(232,238,255,.85);">Chapter ${chapter1Based}</p>`
     }
     ${
@@ -268,7 +311,7 @@ function renderChapterCard(chapter1Based) {
             ${ev
               .map(
                 (s) => `<blockquote style="margin:0;padding:10px;border-left:3px solid rgba(255,204,0,.8);background:rgba(255,255,255,.06);">
-                  ${escapeHtml(s)}
+                  ${highlightSelected(s)}
                 </blockquote>`
               )
               .join("")}
@@ -377,6 +420,7 @@ function drawGraph(raw) {
     timeline: raw?.timeline || {},
     chapters_meta: raw?.chapters_meta || [],
     mentions: raw?.mentions || {},
+    variants: raw?.variants || {}, // ✅ 新增：高亮需要
   };
 
   currentGraphData = data;
@@ -405,7 +449,7 @@ function drawGraph(raw) {
   graphHeight = height;
 
   fg.dataset.baseViewBox = fg.getAttribute("viewBox") || "";
-    // 挂到外层
+  // 挂到外层
   svgOuter.appendChild(fg);
 
   // 收集 nodes/links
@@ -475,17 +519,17 @@ function wireEdgeClick(fg, data) {
     line.parentNode.insertBefore(hit, line.nextSibling);
 
     const sync = () => {
-    const x1 = line.getAttribute("x1");
-    const y1 = line.getAttribute("y1");
-    const x2 = line.getAttribute("x2");
-    const y2 = line.getAttribute("y2");
-    if (x1 == null || y1 == null || x2 == null || y2 == null) return;
+      const x1 = line.getAttribute("x1");
+      const y1 = line.getAttribute("y1");
+      const x2 = line.getAttribute("x2");
+      const y2 = line.getAttribute("y2");
+      if (x1 == null || y1 == null || x2 == null || y2 == null) return;
 
-    hit.setAttribute("x1", x1);
-    hit.setAttribute("y1", y1);
-    hit.setAttribute("x2", x2);
-    hit.setAttribute("y2", y2);
-  };
+      hit.setAttribute("x1", x1);
+      hit.setAttribute("y1", y1);
+      hit.setAttribute("x2", x2);
+      hit.setAttribute("y2", y2);
+    };
 
     requestAnimationFrame(sync);
     const observer = new MutationObserver(sync);
@@ -520,7 +564,9 @@ function wireEdgeClick(fg, data) {
         if (infoEl) {
           infoEl.innerHTML = `
             <p><b>${escapeHtml(a)}</b> & <b>${escapeHtml(b)}</b>: No context found.</p>
-            <button class="btn" onclick="addContextManually('${escapeHtml(a)}', '${escapeHtml(b)}')">Add Context Manually</button>
+            <button class="btn" onclick="addContextManually('${escapeHtml(a)}', '${escapeHtml(
+            b
+          )}')">Add Context Manually</button>
           `;
         }
         return;
@@ -538,19 +584,26 @@ function wireEdgeClick(fg, data) {
             const chips = (s.chapters || [])
               .map(
                 (ch) =>
-                  `<button class="chip" onclick="openChapterFromContext(${Number(ch)})">Chapter ${Number(
+                  `<button class="chip" onclick="openChapterFromContext(${Number(
                     ch
-                  )}</button>`
+                  )})">Chapter ${Number(ch)}</button>`
               )
               .join("");
 
+            // ✅ snippets 同样对当前选中角色高亮（若未选角色则只是 escape）
+            const shown = selectedNodeId ? highlightSelected(text) : escapeHtml(text);
+
             return `
             <div style="margin-bottom: 1rem;">
-              <blockquote>${escapeHtml(text)}</blockquote>
+              <blockquote>${shown}</blockquote>
               ${chips ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">${chips}</div>` : ""}
               <div style="margin-top: 0.5rem;display:flex;gap:8px;flex-wrap:wrap;">
-                <button class="btn" onclick="editContextWithData('${escapeHtml(a)}', '${escapeHtml(b)}', ${idx})">Edit</button>
-                <button class="btn" onclick="deleteContext('${escapeHtml(a)}', '${escapeHtml(b)}', ${idx})">Delete</button>
+                <button class="btn" onclick="editContextWithData('${escapeHtml(a)}', '${escapeHtml(
+              b
+            )}', ${idx})">Edit</button>
+                <button class="btn" onclick="deleteContext('${escapeHtml(a)}', '${escapeHtml(
+              b
+            )}', ${idx})">Delete</button>
               </div>
             </div>
           `;
@@ -560,7 +613,9 @@ function wireEdgeClick(fg, data) {
         infoEl.innerHTML = `
           <h3 style="text-align:left;margin:0 0 8px;">📖 ${escapeHtml(a)} & ${escapeHtml(b)}</h3>
           ${snippets}
-          <button class="btn primary" onclick="addContextManually('${escapeHtml(a)}', '${escapeHtml(b)}')" style="margin-top: 10px;">Add More Context</button>
+          <button class="btn primary" onclick="addContextManually('${escapeHtml(
+            a
+          )}', '${escapeHtml(b)}')" style="margin-top: 10px;">Add More Context</button>
         `;
       }
     });
@@ -926,7 +981,11 @@ function renderFlower(centerId, topK = 16) {
     .slice(0, topK);
 
   if (!neighbors.length) {
-    svg.append("text").attr("x", 10).attr("y", 20).attr("font-size", 12).text("No relationship data for flower.");
+    svg.append("text")
+      .attr("x", 10)
+      .attr("y", 20)
+      .attr("font-size", 12)
+      .text("No relationship data for flower.");
     return;
   }
 
@@ -992,33 +1051,32 @@ function renderFlower(centerId, topK = 16) {
   petals.append("title").text((d) => `${centerId} ↔ ${d.id}: ${d.w}`);
 
   g.selectAll("text.__petal_label__")
-  .data(neighbors)
-  .enter()
-  .append("text")
-  .attr("class", "__petal_label__")
-  .attr("font-size", 10)
-  .attr("font-weight", 800)
-  .attr("fill", "rgba(232,238,255,.92)")
-  .attr("paint-order", "stroke")
-  .attr("stroke", "rgba(0,0,0,.55)")
-  .attr("stroke-width", 3)
-  .attr("dominant-baseline", "middle")
-  .attr("text-anchor", (d, i) => {
-    const mid = ((i + 0.5) / n) * Math.PI * 2;
-    // 上半/下半都无所谓，关键是左右半区：左边靠右对齐，右边靠左对齐
-    const ang = mid - Math.PI / 2;
-    const cos = Math.cos(ang);
-    return cos < 0 ? "end" : "start";
-  })
-  .attr("transform", (d, i) => {
-    const mid = ((i + 0.5) / n) * Math.PI * 2;
-    const rr = rScale(d.w) + 10;
-    const ang = mid - Math.PI / 2;
-    const x = Math.cos(ang) * rr;
-    const y = Math.sin(ang) * rr;
-    return `translate(${x},${y})`; // 不再 rotate
-  })
-  .text((d) => (d.id.length > 14 ? d.id.slice(0, 14) + "…" : d.id));
+    .data(neighbors)
+    .enter()
+    .append("text")
+    .attr("class", "__petal_label__")
+    .attr("font-size", 10)
+    .attr("font-weight", 800)
+    .attr("fill", "rgba(232,238,255,.92)")
+    .attr("paint-order", "stroke")
+    .attr("stroke", "rgba(0,0,0,.55)")
+    .attr("stroke-width", 3)
+    .attr("dominant-baseline", "middle")
+    .attr("text-anchor", (d, i) => {
+      const mid = ((i + 0.5) / n) * Math.PI * 2;
+      const ang = mid - Math.PI / 2;
+      const cos = Math.cos(ang);
+      return cos < 0 ? "end" : "start";
+    })
+    .attr("transform", (d, i) => {
+      const mid = ((i + 0.5) / n) * Math.PI * 2;
+      const rr = rScale(d.w) + 10;
+      const ang = mid - Math.PI / 2;
+      const x = Math.cos(ang) * rr;
+      const y = Math.sin(ang) * rr;
+      return `translate(${x},${y})`;
+    })
+    .text((d) => (d.id.length > 14 ? d.id.slice(0, 14) + "…" : d.id));
 }
 
 // ---------------- 强高亮单个邻居边 ----------------
