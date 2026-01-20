@@ -361,3 +361,64 @@ h2{
   text-align: center;
   font-size: 18px;
 }
+
+/* ===================== Chart Help (Question Mark) ===================== */
+.chart-box{
+  position: relative;        /* 作为绝对定位参照 */
+  width: 100%;
+}
+
+.chart-help-btn{
+  position: absolute;
+  top: 10px;
+  right: 12px;
+
+  width: 22px;
+  height: 22px;
+  border-radius: 8px;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  font-weight: 900;
+  font-size: 13px;
+  line-height: 1;
+
+  cursor: pointer;
+  user-select: none;
+
+  /* 跟你深色背景一致 */
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+  border: 1px solid var(--line);
+
+  z-index: 50;
+  box-shadow: var(--shadow);
+}
+
+.chart-help-btn:hover{
+  background: rgba(255,255,255,.10);
+  border-color: rgba(255,255,255,.22);
+}
+
+.chart-help-pop{
+  position: absolute;
+  top: 40px;
+  right: 12px;
+
+  width: 300px;
+  padding: 10px 12px;
+
+  background: rgba(11,16,32,.98);     /* 深色卡片 */
+  color: var(--text);
+
+  border: 1px solid var(--line);
+  border-radius: 12px;
+
+  font-size: 12px;
+  line-height: 1.5;
+
+  z-index: 50;
+  box-shadow: var(--shadow);
+}

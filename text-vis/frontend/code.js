@@ -49,6 +49,51 @@ const resetViewBtn = document.getElementById("resetViewBtn");
 // timeline 卡片容器
 const chapterCardEl = document.getElementById("chapterCard");
 
+//charthelp问号按钮
+let __chartHelpDocBound = false;
+
+function attachChartHelp(container, text) {
+  if (!container) return;
+
+  const oldBtn = container.querySelector(".chart-help-btn");
+  const oldPop = container.querySelector(".chart-help-pop");
+  if (oldBtn) oldBtn.remove();
+  if (oldPop) oldPop.remove();
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "chart-help-btn";
+  btn.textContent = "?";
+
+  const pop = document.createElement("div");
+  pop.className = "chart-help-pop";
+  pop.textContent = text;
+  pop.style.display = "none";
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    pop.style.display = pop.style.display === "none" ? "block" : "none";
+  });
+
+  pop.addEventListener("click", (e) => e.stopPropagation());
+
+  if (!__chartHelpDocBound) {
+    __chartHelpDocBound = true;
+    document.addEventListener(
+      "click",
+      () => {
+        document.querySelectorAll(".chart-help-pop").forEach((el) => {
+          el.style.display = "none";
+        });
+      },
+      { passive: true }
+    );
+  }
+
+  container.appendChild(btn);
+  container.appendChild(pop);
+}
+
 // ---------------- 工具函数 ----------------
 function normalizeId(x) {
   if (!x) return "";
@@ -430,12 +475,19 @@ function wireEdgeClick(fg, data) {
     line.parentNode.insertBefore(hit, line.nextSibling);
 
     const sync = () => {
-      hit.setAttribute("x1", line.getAttribute("x1"));
-      hit.setAttribute("y1", line.getAttribute("y1"));
-      hit.setAttribute("x2", line.getAttribute("x2"));
-      hit.setAttribute("y2", line.getAttribute("y2"));
-    };
-    sync();
+    const x1 = line.getAttribute("x1");
+    const y1 = line.getAttribute("y1");
+    const x2 = line.getAttribute("x2");
+    const y2 = line.getAttribute("y2");
+    if (x1 == null || y1 == null || x2 == null || y2 == null) return;
+
+    hit.setAttribute("x1", x1);
+    hit.setAttribute("y1", y1);
+    hit.setAttribute("x2", x2);
+    hit.setAttribute("y2", y2);
+  };
+
+    requestAnimationFrame(sync);
     const observer = new MutationObserver(sync);
     observer.observe(line, { attributes: true });
 
@@ -701,7 +753,9 @@ function showCharacterDetails(centerId) {
   let html = `
     <h3 style="text-align:left;margin:0 0 6px;">🧍 ${escapeHtml(centerId)}</h3>
     <p style="margin:0 0 10px;color:rgba(232,238,255,.85);">Appears <b>${centerCount}</b> times in text.</p>
-    <div id="${flowerHostId}" style="margin:8px 0 12px;"></div>
+    <div class="chart-box" id="flower-box" style="margin:8px 0 12px;">
+      <div id="${flowerHostId}"></div>
+    </div>
   `;
 
   if (!neighbors.length) {
@@ -755,6 +809,17 @@ function showCharacterDetails(centerId) {
 
 // ---------------- Timeline ----------------
 function renderCharacterTimeline(timelineData) {
+  const timelineBox = document.getElementById("timeline-box");
+  if (timelineBox) {
+    attachChartHelp(
+      timelineBox,
+      "This timeline shows how often the selected character appears across chapters.\n\n" +
+        "• Each point represents a chapter.\n" +
+        "• The height indicates number of mentions.\n" +
+        "• Click a point to highlight that chapter."
+    );
+  }
+
   const svgEl = document.getElementById("timeline-svg");
   if (!svgEl) return;
 
@@ -830,6 +895,17 @@ function renderFlower(centerId, topK = 16) {
   svgEl.setAttribute("height", "240");
   svgEl.style.width = "100%";
   host.appendChild(svgEl);
+
+  const flowerBox = host.parentElement; // .chart-box#flower-box
+  if (flowerBox) {
+    attachChartHelp(
+      flowerBox,
+      "This flower diagram shows the characters most strongly connected to the selected character.\n\n" +
+        "• Each petal represents a co-occurring character.\n" +
+        "• Petal size and color indicate relationship strength.\n" +
+        "• Click a petal to switch focus to that character."
+    );
+  }
 
   const svg = d3.select(svgEl);
   svg.selectAll("*").remove();
@@ -916,23 +992,33 @@ function renderFlower(centerId, topK = 16) {
   petals.append("title").text((d) => `${centerId} ↔ ${d.id}: ${d.w}`);
 
   g.selectAll("text.__petal_label__")
-    .data(neighbors)
-    .enter()
-    .append("text")
-    .attr("class", "__petal_label__")
-    .attr("font-size", 10)
-    .attr("font-weight", 800)
-    .attr("fill", "rgba(232,238,255,.92)")
-    .attr("text-anchor", "middle")
-    .attr("transform", (d, i) => {
-      const mid = ((i + 0.5) / n) * Math.PI * 2;
-      const rr = rScale(d.w) + 10;
-      const x = Math.cos(mid - Math.PI / 2) * rr;
-      const y = Math.sin(mid - Math.PI / 2) * rr;
-      const rot = (mid * 180) / Math.PI - 90;
-      return `translate(${x},${y}) rotate(${rot})`;
-    })
-    .text((d) => (d.id.length > 12 ? d.id.slice(0, 12) + "…" : d.id));
+  .data(neighbors)
+  .enter()
+  .append("text")
+  .attr("class", "__petal_label__")
+  .attr("font-size", 10)
+  .attr("font-weight", 800)
+  .attr("fill", "rgba(232,238,255,.92)")
+  .attr("paint-order", "stroke")
+  .attr("stroke", "rgba(0,0,0,.55)")
+  .attr("stroke-width", 3)
+  .attr("dominant-baseline", "middle")
+  .attr("text-anchor", (d, i) => {
+    const mid = ((i + 0.5) / n) * Math.PI * 2;
+    // 上半/下半都无所谓，关键是左右半区：左边靠右对齐，右边靠左对齐
+    const ang = mid - Math.PI / 2;
+    const cos = Math.cos(ang);
+    return cos < 0 ? "end" : "start";
+  })
+  .attr("transform", (d, i) => {
+    const mid = ((i + 0.5) / n) * Math.PI * 2;
+    const rr = rScale(d.w) + 10;
+    const ang = mid - Math.PI / 2;
+    const x = Math.cos(ang) * rr;
+    const y = Math.sin(ang) * rr;
+    return `translate(${x},${y})`; // 不再 rotate
+  })
+  .text((d) => (d.id.length > 14 ? d.id.slice(0, 14) + "…" : d.id));
 }
 
 // ---------------- 强高亮单个邻居边 ----------------

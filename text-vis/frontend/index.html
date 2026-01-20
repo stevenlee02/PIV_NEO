@@ -338,6 +338,65 @@
       max-height: 180px;
       resize: vertical;
     }
+
+    /* === Chart Help === */
+    .chart-box{
+      position: relative !important;
+    }
+
+    .chart-help-btn{
+      position: absolute !important;
+      top: 10px !important;
+      right: 12px !important;
+
+      width: 24px;
+      height: 24px;
+      border-radius: 8px;
+
+      display: flex !important;
+      align-items: center;
+      justify-content: center;
+
+      font-weight: 900;
+      font-size: 14px;
+      cursor: pointer;
+      user-select: none;
+
+      background: rgba(25,30,50,0.92);
+      color: rgba(232,238,255,.95);
+      border: 1px solid rgba(255,255,255,.22);
+
+      z-index: 9999;
+      box-shadow: 0 10px 26px rgba(0,0,0,.35);
+      padding: 0 !important; /* 防止被全局 button padding 搞形状 */
+    }
+
+    .chart-help-btn:hover{
+      background: rgba(35,42,70,0.95);
+      border-color: rgba(255,255,255,.35);
+    }
+
+    .chart-help-pop{
+      position: absolute !important;
+      top: 44px !important;
+      right: 12px !important;
+
+      width: 300px;
+      padding: 10px 12px;
+
+      background: rgba(18,22,40,0.96);
+      color: rgba(232,238,255,.95);
+
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 12px;
+
+      font-size: 12px;
+      line-height: 1.5;
+
+      z-index: 9999;
+      box-shadow: 0 16px 40px rgba(0,0,0,.45);
+      white-space: pre-wrap;
+    }
   </style>
 </head>
 
@@ -389,8 +448,9 @@
       <!-- ✅ Timeline panel: add chapterCard (feature 4) -->
       <div id="timeline-panel" class="card panel hidden" data-panel="timeline">
         <h3>📈 Character Timeline</h3>
-        <svg id="timeline-svg" height="150"></svg>
-
+        <div class="chart-box" id="timeline-box">
+          <svg id="timeline-svg" height="150"></svg>
+        </div>
         <!-- Chapter card -->
         <div id="chapterCard" class="card" style="margin-top:10px;"></div>
       </div>
