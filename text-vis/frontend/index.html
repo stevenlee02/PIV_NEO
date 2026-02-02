@@ -3,200 +3,489 @@
 <head>
   <meta charset="UTF-8" />
   <title>📖 Character Network Visualization</title>
-  <!-- d3 给 timeline 用（code.js 也会 import d3 module，但这个不冲突，你可以保留） -->
-  <script src="https://d3js.org/d3.v7.min.js"></script>
+
+  <!-- IMPORTANT:
+       Remove global d3 script to avoid conflict with ESM import in code.js:
+       <script src="https://d3js.org/d3.v7.min.js"></script>
+  -->
+
   <style>
-    body {
-      font-family: sans-serif;
-      background-color: #fafafa;
-      display: flex;
-      flex-direction: row;
-      margin: 5rem;
-      padding: 0;
+    :root{
+      --bg:#0b1020;
+      --panel:rgba(255,255,255,.08);
+      --panel2:rgba(255,255,255,.06);
+      --line:rgba(255,255,255,.14);
+      --text:#e8eeff;
+      --muted:#a9b5db;
+      --accent:#6ea8ff;
+      --accent2:#ffcc00;
+      --danger:#ff5733;
+      --shadow:0 18px 40px rgba(0,0,0,.35);
+      --radius:14px;
+      --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Liberation Sans";
+    }
+    *{ box-sizing:border-box; }
+
+    body{
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      display:flex;
+      flex-direction:row;
+      margin:0;
+      padding:0;
+      height:100vh;
+      overflow:hidden;
     }
 
     /* 左侧：关系图 */
-    #left {
+    #left{
       flex: 3;
-      padding: 1rem;
+      padding: 14px;
+      overflow:auto;
     }
 
-    /* 右侧：详情 + 时间线 + 列表 */
-    #right {
+    /* 右侧：详情 + 时间线 + 列表 + contexts */
+    #right{
       flex: 2;
-      min-width: 350px;
-      max-width: 500px;
-      border-left: 5px solid #fff;
-      border-right: 5px solid #fff;
-      margin-left: 2rem;
-      padding: 1rem;
-      background: #fff;
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
+      min-width: 360px;
+      max-width: 520px;
+      border-left: 1px solid var(--line);
+      padding: 14px;
+      background: linear-gradient(180deg, var(--panel), var(--panel2));
+      display:flex;
+      flex-direction:column;
+      height:100vh;
+      overflow:hidden;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.04);
     }
 
-    #details {
-      margin-bottom: 1rem;
-      max-height: 40vh;      /* 上半部分详情区最高占 40% 高度 */
-      overflow-y: auto;
-      padding-right: 8px;
-      box-sizing: border-box;
+    h2{
+      margin: 8px 0 10px;
+      text-align:center;
+      font-weight: 900;
+      letter-spacing:.2px;
+    }
+    h3{
+      margin: 6px 0 10px;
+      text-align:center;
+      font-weight: 800;
+      letter-spacing:.2px;
     }
 
-    /* 搜索框样式 */
-    #charSearch {
+    /* 顶部操作条 */
+    .topbar{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      justify-content:center;
+      flex-wrap:wrap;
+      margin-bottom: 10px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.05);
+      box-shadow: var(--shadow);
+    }
+
+    input, textarea, select{
+      width:100%;
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      outline:none;
+    }
+    input::placeholder, textarea::placeholder{ color: rgba(169,181,219,.7); }
+
+    .btn{
+      appearance:none;
+      border:1px solid var(--line);
+      background: rgba(255,255,255,.07);
+      color: var(--text);
+      padding: 9px 12px;
+      border-radius: 999px;
+      cursor:pointer;
+      font-weight: 800;
+      transition: transform .08s ease, background .12s ease, border-color .12s ease;
+      white-space:nowrap;
+    }
+    .btn:hover{ transform: translateY(-1px); border-color: rgba(255,255,255,.22); }
+    .btn:active{ transform: translateY(0); }
+
+    .btn.primary{
+      background: rgba(110,168,255,.18);
+      border-color: rgba(110,168,255,.45);
+    }
+    .btn.primary:hover{ background: rgba(110,168,255,.26); }
+    .btn.danger{
+      background: rgba(255,87,51,.18);
+      border-color: rgba(255,87,51,.45);
+    }
+
+    #status{
+      width:100%;
+      text-align:center;
+      color: var(--muted);
+      margin: 6px 0 0;
+      font-size: 12px;
+    }
+
+    /* Graph */
+    #graph{
       width: 100%;
-      padding: 0.4rem 0.6rem;
-      margin-bottom: 0.5rem;
-      font-size: 0.95rem;
-      box-sizing: border-box;
+      height: calc(100vh - 260px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: radial-gradient(1200px 800px at 20% 10%, rgba(110,168,255,.10), transparent 60%),
+                  radial-gradient(1000px 700px at 80% 60%, rgba(255,204,0,.06), transparent 60%),
+                  rgba(255,255,255,.02);
+      box-shadow: var(--shadow);
     }
 
-    /* 搜索栏容器（搜索 + 排序） */
-    #search-bar {
-      margin-bottom: 0.5rem;
+    .card{
+      border:1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.05);
+      box-shadow: var(--shadow);
+      padding: 12px;
     }
 
-    /* 人物列表：可滚动 */
-    #charList {
-      flex: 2;
+    #linkContextEditor{
+      width:100%;
+      height: 250px;
+      margin-bottom: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+    }
+
+    #edge-status{
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+    }
+
+    #info{
+      max-height: 500px;
+      overflow:auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      white-space: pre-wrap;
+    }
+
+    blockquote{
+      margin: 10px 0;
+      padding: 10px 12px;
+      background: rgba(255,255,255,.05);
+      border-left: 3px solid rgba(110,168,255,.55);
+      border-radius: 10px;
+      color: var(--text);
+    }
+
+    /* ✅ Chapter chips (for feature 3) */
+    .chip{
+      appearance:none;
+      border:1px solid var(--line);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      padding: 5px 10px;
+      border-radius: 999px;
+      cursor:pointer;
+      font-weight: 800;
+      font-size: 12px;
+      transition: transform .08s ease, border-color .12s ease, background .12s ease;
+      white-space:nowrap;
+    }
+    .chip:hover{
+      transform: translateY(-1px);
+      border-color: rgba(255,255,255,.22);
+      background: rgba(255,255,255,.08);
+    }
+    .chip:active{ transform: translateY(0); }
+
+    /* 右侧：toggle buttons */
+    #panelToggles{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      padding:10px;
+      border:1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.05);
+      box-shadow: var(--shadow);
+      margin-bottom: 10px;
+    }
+
+    .toggle-btn{
+      appearance:none;
+      border:1px solid var(--line);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 999px;
+      cursor:pointer;
+      font-weight: 800;
+    }
+    .toggle-btn.active{
+      background: #6ea8ff8c;
+      border-color: rgba(110,168,255,.9);
+      color: #0b1020;
+    }
+
+    /* 右侧内容区：可滚动 */
+    #rightScroll{
+      overflow:auto;
+      padding-right: 6px;
+    }
+
+    #details{
+      margin-bottom: 10px;
       max-height: none;
-      overflow-y: auto;
+      overflow: visible;
+    }
+
+    /* Neighbor table */
+    .neighbors-table{
+      width:100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 12px;
+      overflow:hidden;
+      border-radius: 12px;
+    }
+    .neighbors-table th,
+    .neighbors-table td{
+      border-bottom: 1px solid var(--line);
+      padding: 8px 10px;
+    }
+    .neighbors-table th{
+      background: rgba(255,255,255,.05);
+      color: var(--muted);
+      text-align:left;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      font-size: 11px;
+    }
+    .neighbors-table tr:hover td{
+      background: rgba(255,255,255,.04);
+    }
+    .neighbors-table-wrapper{
+      max-height: 400px;
+      overflow:auto;
+    }
+    .neighbors-block summary{
+      cursor:pointer;
+      font-weight:900;
+      list-style:none;
+    }
+    .neighbors-block summary::-webkit-details-marker{ display:none; }
+
+    /* Panels */
+    .panel{ margin-bottom: 12px; }
+    .panel.hidden{ display:none; }
+
+    #timeline-svg{
+      width:100%;
+      display:block;
+      border:1px solid rgba(255,255,255,.10);
+      border-radius: 12px;
+      background: rgba(255,255,255,.03);
+    }
+
+    /* 搜索栏 */
+    #search-bar{
+      margin-bottom: 10px;
+      display:flex;
+      gap: 8px;
+      align-items:center;
+    }
+    #search-bar #charSearch{ flex: 1; }
+    #sortMode{ width: 210px; }
+
+    /* 人物列表 */
+    #charList{
+      max-height: 320px;
+      overflow:auto;
       padding-left: 1.2rem;
-      font-size: 0.95rem;
-      line-height: 1.5;
+      font-size: 13px;
+      line-height: 1.6;
+      margin: 4px 0 12px;
+    }
+    #charList li{
+      cursor:pointer;
+      padding: 2px 0;
+    }
+    #charList li:hover{ color: var(--accent2); }
+
+    /* 文本输入分析（左侧） */
+    #article-section{
+      margin: 10px 0 12px;
+      padding: 12px;
+      background: rgba(255,255,255,.05);
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+    #articleAnalyzeBtn{
+      width:100%;
+      margin-top: 8px;
+    }
+    #article-section textarea{
+      width:100%;
+      height: 140px;
+      min-height: 140px;
+      max-height: 180px;
+      resize: vertical;
     }
 
-    #graph {
-      width: 100%;
-      height: 80vh;
-      border: 1px solid #ddd;
-      background-color: #fff;
+    /* === Chart Help === */
+    .chart-box{
+      position: relative !important;
     }
 
-    h2 {
-      text-align: center;
-    }
+    .chart-help-btn{
+      position: absolute !important;
+      top: 10px !important;
+      right: 12px !important;
 
-    /* 文本编辑器样式 */
-    #context-editor {
-      margin-top: 1rem;
-      padding: 1rem;
-      border: 1px solid #ddd;
-      background: #f9f9f9;
-      border-radius: 4px;
-    }
+      width: 24px;
+      height: 24px;
+      border-radius: 8px;
 
-    #linkContextEditor {
-      width: 100%;
-      height: 150px;
-      margin-bottom: 0.5rem;
-      padding: 0.5rem;
-      box-sizing: border-box;
-      font-family: monospace;
-      font-size: 0.9rem;
-    }
+      display: flex !important;
+      align-items: center;
+      justify-content: center;
 
-    #saveContextBtn {
-      padding: 0.4rem 0.8rem;
-      background: #4CAF50;
-      color: white;
-      border: none;
-      border-radius: 3px;
+      font-weight: 900;
+      font-size: 14px;
       cursor: pointer;
+      user-select: none;
+
+      background: rgba(25,30,50,0.92);
+      color: rgba(232,238,255,.95);
+      border: 1px solid rgba(255,255,255,.22);
+
+      z-index: 9999;
+      box-shadow: 0 10px 26px rgba(0,0,0,.35);
+      padding: 0 !important; /* 防止被全局 button padding 搞形状 */
     }
 
-    #saveContextBtn:hover {
-      background: #45a049;
+    .chart-help-btn:hover{
+      background: rgba(35,42,70,0.95);
+      border-color: rgba(255,255,255,.35);
     }
 
-    #edge-status {
-      font-size: 0.9rem;
-      color: #666;
-      margin-top: 0.5rem;
+    .chart-help-pop{
+      position: absolute !important;
+      top: 44px !important;
+      right: 12px !important;
+
+      width: 300px;
+      padding: 10px 12px;
+
+      background: rgba(18,22,40,0.96);
+      color: rgba(232,238,255,.95);
+
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 12px;
+
+      font-size: 12px;
+      line-height: 1.5;
+
+      z-index: 9999;
+      box-shadow: 0 16px 40px rgba(0,0,0,.45);
+      white-space: pre-wrap;
     }
   </style>
 </head>
+
 <body>
-  <!-- 左侧：文件上传 + 网络图 -->
+  <!-- 左侧 -->
   <div id="left">
     <h2>Character Network</h2>
-    <input type="file" id="fileInput" accept=".txt" />
-    <button id="uploadBtn">Analyze</button>
-    <p id="status"></p>
 
-    <!-- 上下文编辑器 -->
-    <div id="context-editor">
-      <h3>Edit Context</h3>
-      <textarea id="linkContextEditor" placeholder="Click a connection line to load and edit context..."></textarea>
-      <div>
-        <button id="saveContextBtn">Save Context</button>
-        <div id="edge-status">No edge selected</div>
+    <div class="topbar">
+      <input type="file" id="fileInput" accept=".txt" />
+      <button class="btn primary" id="uploadBtn">Analyze</button>
+      <button class="btn danger" id="resetViewBtn">Reset View</button>
+      <p id="status"></p>
+    </div>
+
+    <!-- Enter Text to Analyze：放左侧 -->
+    <details id="articleFold" class="card" style="margin: 10px 0 12px;">
+      <summary id="articleSummary">
+        <h2 style="text-align:center; margin: 0;">Enter Text to Analyze</h2>
+      </summary>
+
+      <div id="article-section" style="margin-top:10px;">
+        <textarea id="articleInput" rows="6"></textarea>
+        <button class="btn primary" id="articleAnalyzeBtn" style="width:100%;margin-top:8px;">
+          Save &amp; Update Graph
+        </button>
+        <p id="link-context-status"></p>
       </div>
-    </div>
-
-    <!-- 右侧 info：展示选中边的片段列表 -->
-    <div id="info" style="
-      border: 1px solid #ccc;
-      background: #fff;
-      margin: 1rem auto;
-      width: 80%;
-      padding: 1rem;
-      max-height: 300px;
-      overflow-y: auto;
-      font-family: monospace;
-      white-space: pre-wrap;">
-    </div>
-
-    <!-- Reset View 按钮放在图上方 -->
-    <button id="resetViewBtn" style="
-      margin-bottom: 0.3rem;
-      padding: 0.4rem 0.8rem;
-      font-size: 0.9rem;
-      cursor: pointer;
-    ">Reset View</button>
+    </details>
 
     <svg id="graph"></svg>
   </div>
 
-  <!-- 右侧：详情 + 时间线 + 列表 + 文本输入 -->
+  <!-- 右侧 -->
   <div id="right">
     <h2>Character Details</h2>
-    <div id="details">Click a node to see details</div>
 
-    <!-- 角色时间线 -->
-    <div id="timeline-panel">
-      <h3 style="text-align:center;">📈 Character Timeline</h3>
-      <svg id="timeline-svg" width="100%" height="150"></svg>
+    <!-- Toggle buttons：All Characters 最右 -->
+    <div id="panelToggles">
+      <button class="toggle-btn" data-panel="neighbors">Character</button>
+      <button class="toggle-btn" data-panel="timeline">Timeline</button>
+      <button class="toggle-btn" data-panel="contexts">Contexts</button>
+      <button class="toggle-btn" data-panel="allchars">All Characters</button>
     </div>
 
-    <h2 style="margin-top: 1rem;">All Characters</h2>
+    <div id="rightScroll">
+      <div id="details" class="card panel" data-panel="neighbors">Click a node to see details</div>
 
-<!-- 搜索 + 排序 -->
-<div id="search-bar">
-  <input
-    id="charSearch"
-    type="text"
-    placeholder="Search character..."
-  />
-  <select id="sortMode">
-    <option value="freq">Sort by frequency of occurrence</option>
-    <option value="name">Sort by surname initial</option>
-  </select>
-</div>
+      <!-- ✅ Timeline panel: add chapterCard (feature 4) -->
+      <div id="timeline-panel" class="card panel hidden" data-panel="timeline">
+        <h3>📈 Character Timeline</h3>
+        <div class="chart-box" id="timeline-box">
+          <svg id="timeline-svg" height="300"></svg>
+        </div>
+        <!-- Chapter card -->
+        <div id="chapterCard" class="card" style="margin-top:10px;"></div>
+      </div>
 
-<!-- 人物列表（紧贴搜索栏） -->
-<ul id="charList"></ul>
+      <!-- Contexts：承载 Edit Context + snippets -->
+      <div id="contexts-panel" class="panel hidden" data-panel="contexts" style="display:flex;flex-direction:column;gap:10px;">
+        <div id="context-editor" class="card">
+          <h3 style="text-align:left;margin:0 0 8px;">Edit Context</h3>
+          <textarea id="linkContextEditor" placeholder="Click a connection line to load and edit context..."></textarea>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <button class="btn primary" id="saveContextBtn">Save Context</button>
+            <div id="edge-status">No edge selected</div>
+          </div>
+        </div>
 
-<!-- 文本输入分析（移到人物列表下面） -->
-<div id="article-section">
-  <h2>Enter Text to Analyze</h2>
-  <textarea id="articleInput" rows="6" style="width:100%;"></textarea>
-  <button id="articleAnalyzeBtn">Save & Update Graph</button>
-  <p id="link-context-status"></p>
-</div>
+        <div id="info" class="card"></div>
+      </div>
 
-  <script type="module" src="./code.js?v=2"></script>
+      <!-- All Characters：独立 panel -->
+      <div id="allchars-panel" class="card panel hidden" data-panel="allchars">
+        <h3 style="text-align:center;margin:6px 0 10px;">All Characters</h3>
+
+        <div id="search-bar">
+          <input id="charSearch" type="text" placeholder="Search character..." />
+          <select id="sortMode">
+            <option value="freq">Sort by frequency of occurrence</option>
+            <option value="name">Sort by surname initial</option>
+          </select>
+        </div>
+
+        <ul id="charList"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./code.js?v=NEW"></script>
 </body>
 </html>
